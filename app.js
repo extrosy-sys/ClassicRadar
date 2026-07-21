@@ -44,7 +44,7 @@ var layers = {
   base: L.tileLayer("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png",
         { subdomains:"abcd", maxZoom:18, noWrap:true, attribution:"&copy; OpenStreetMap, &copy; CARTO" }),
   county: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
-        { pane:"clutter", maxZoom:16, noWrap:true, opacity:0.9, attribution:"Boundaries &copy; Esri" }),
+        { pane:"clutter", maxZoom:18, maxNativeZoom:16, noWrap:true, opacity:0.9, attribution:"Boundaries &copy; Esri" }),
   hwy: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}",
         { pane:"clutter", maxZoom:18, noWrap:true, attribution:"Transportation &copy; Esri" }),
   city: L.tileLayer("https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png",
@@ -71,8 +71,8 @@ function clearFrames() {
 }
 function showIem(on) {
   if (on && !iemLayer) {
-    iemLayer = L.tileLayer(IEM_URL, { pane:"radar", opacity:radarOpacity(), maxZoom:12, noWrap:true, zIndex:20,
-      attribution:"Base reflectivity &copy; Iowa Environmental Mesonet" }).addTo(map);
+    iemLayer = L.tileLayer(IEM_URL, { pane:"radar", opacity:radarOpacity(), maxZoom:18, maxNativeZoom:14,
+      noWrap:true, zIndex:20, attribution:"Base reflectivity &copy; Iowa Environmental Mesonet" }).addTo(map);
   } else if (!on && iemLayer) {
     map.removeLayer(iemLayer); iemLayer = null;
   }
@@ -97,7 +97,9 @@ function loadRainViewer() {
       var use = past.slice(Math.max(0, past.length - n));
       use.forEach(function (f) {
         var url = j.host + f.path + "/256/{z}/{x}/{y}/" + scheme + "/1_1.png";
-        var lyr = L.tileLayer(url, { pane:"radar", opacity:0, maxZoom:12, noWrap:true,
+        // RainViewer's radar mosaic is only rendered to z7; above that its server returns a
+        // "Zoom Level Not Supported" tile. Clamp to z7 so Leaflet upscales those pixels instead.
+        var lyr = L.tileLayer(url, { pane:"radar", opacity:0, maxZoom:18, maxNativeZoom:7, noWrap:true,
           attribution:"Radar &copy; RainViewer" }).addTo(map);
         frameLayers.push(lyr);
         frameTimes.push(f.time);
@@ -158,7 +160,8 @@ function applyProduct() {
   if (src === "rv") {
     setPlaybar(true);
     note.textContent = opt.text.replace(/&deg;/g,"°") +
-      " — animated loop of the last ~2 h (RainViewer). Press PLAY or drag the frame slider.";
+      " — animated loop of the last ~2 h (RainViewer, ~2 km mosaic; pixelates when zoomed past ~z7). " +
+      "For crisp detail when zoomed in, tick “IEM true-dBZ” below.";
     loadRainViewer();
   } else { // unavail (velocity / VIL / echo tops - single-site products)
     clearFrames();

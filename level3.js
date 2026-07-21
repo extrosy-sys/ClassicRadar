@@ -171,7 +171,10 @@ window.Level3 = {
       var idm = idRe.exec(line);
       if (!idm) return;
       var id = idm[1], pairs = [], m;
-      var re = /(\d{1,3})\s*\/\s*(\d{1,3})/g;
+      // integer az/range pairs only — the (?<![\d.]) / (?![\d.]) guards exclude the
+      // trailing decimal "error" column (e.g. "1.0/ 1.0") that otherwise parsed as a
+      // bogus ~0-range forecast point, drawing a track straight back to the radar.
+      var re = /(?<![\d.])(\d{1,3})\s*\/\s*(\d{1,3})(?![\d.])/g;
       while ((m = re.exec(line))) pairs.push([parseInt(m[1], 10), parseInt(m[2], 10)]);
       if (pairs.length < 2) return;
       var az = pairs[0][0], ran = pairs[0][1], mvd = pairs[1][0], mvs = pairs[1][1];
