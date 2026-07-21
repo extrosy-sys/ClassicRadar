@@ -36,6 +36,7 @@ function pane(name, z) { map.createPane(name); map.getPane(name).style.zIndex = 
 pane("radar", 250);
 pane("velocity", 260);
 pane("clutter", 350);
+pane("alerts", 380);
 pane("warn", 400);
 pane("sites", 500);
 pane("track", 620);
@@ -631,6 +632,8 @@ function cellId(i) {  // A0, B1, ... classic alphanumeric-style labels
 
 var warnLayer = L.layerGroup([], { pane:"warn" }).addTo(map);
 var trackLayer = L.layerGroup([], { pane:"track" }).addTo(map);
+var alertLayer = L.layerGroup([], { pane:"alerts" }).addTo(map);      // all in-view alert areas (toggle)
+var alertSelLayer = L.layerGroup([], { pane:"warn" }).addTo(map);     // the selected alert, highlighted
 var lastL3 = null;
 
 function haversine(a, b, c, d) {
@@ -679,6 +682,7 @@ function fetchNstCached(site3) {
 
 function loadStormData() {
   setTableStatus("querying NWS + Level III…");
+  loadAlerts();                                   // verbose alerts table (independent, non-blocking)
   var warnP = fetch(WARN_URL, { headers:{ "Accept":"application/geo+json" } })
     .then(function (r) { return r.ok ? r.json() : { features: [] }; })
     .then(function (j) { return j.features || []; })
@@ -1010,14 +1014,157 @@ document.getElementById("c-sites").addEventListener("change", function () {
 });
 
 /* storm panel tabs: table <-> raw Level III text */
-function showTab(text) {
-  document.getElementById("tablebody").style.display = text ? "none" : "";
-  document.getElementById("textreadout").style.display = text ? "" : "none";
-  document.getElementById("tab-table").classList.toggle("active", !text);
-  document.getElementById("tab-text").classList.toggle("active", text);
+/* ===================== VERBOSE WEATHER ALERTS ===================== */
+/* Every active NWS alert (warnings, watches, advisories, statements — all event types)
+   whose polygon intersects the current view, listed with full headline/description/
+   instruction text and linked to the map: click a card -> fly + highlight its area;
+   click an area on the map -> open its card. National list cached 60 s, re-filtered per pan. */
+var ALERTS_URL = "https://api.weather.gov/alerts/active?status=actual&message_type=alert";
+var alertsData = [];          // in-view alerts (sorted)
+var alertRefs = {};           // index -> { poly, center }
+var alertsCache = null;       // { t, features } national list, 60 s TTL
+var selectedAlertUid = null;
+var SEV_COLOR = { Extreme:"#e0004d", Severe:"#e01f1f", Moderate:"#e8820c", Minor:"#c9a800", Unknown:"#7f8fa6" };
+var SEV_RANK = { Extreme:0, Severe:1, Moderate:2, Minor:3, Unknown:4 };
+function alertColor(sev){ return SEV_COLOR[sev] || SEV_COLOR.Unknown; }
+function esc(s){ return (s == null ? "" : String(s)).replace(/[&<>"]/g, function (c){
+  return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]; }); }
+function fmtLocal(d){ try { return d.toLocaleString([], { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" }); } catch(e){ return ""; } }
+
+function fetchAllAlertsCached() {
+  if (alertsCache && Date.now() - alertsCache.t < 60000) return Promise.resolve(alertsCache.features);
+  return fetch(ALERTS_URL, { headers:{ "Accept":"application/geo+json" } })
+    .then(function (r) { return r.ok ? r.json() : { features: [] }; })
+    .then(function (j) { var f = j.features || []; alertsCache = { t: Date.now(), features: f }; return f; })
+    .catch(function () { return (alertsCache && alertsCache.features) || []; });
 }
-document.getElementById("tab-table").addEventListener("click", function () { showTab(false); });
-document.getElementById("tab-text").addEventListener("click", function () { showTab(true); });
+
+function loadAlerts() {
+  return fetchAllAlertsCached().then(function (features) {
+    var b = map.getBounds().pad(0.15);
+    var inView = features.filter(function (f) {
+      if (!f.geometry) return false;                       // zone-only alerts have no polygon to map
+      var bb = geomBBox(f.geometry);
+      return bb && b.intersects(bb);
+    });
+    renderAlerts(inView);
+  });
+}
+
+function renderAlerts(features) {
+  alertsData = features.map(function (f, i) {
+    var p = f.properties || {};
+    return {
+      uid: f.id || ("a" + i), event: p.event || "Alert", severity: p.severity || "Unknown",
+      urgency: p.urgency || "", headline: p.headline || "", desc: p.description || "",
+      instr: p.instruction || "", area: p.areaDesc || "", sender: p.senderName || "",
+      expires: p.expires ? new Date(p.expires) : null, effective: p.effective ? new Date(p.effective) : null,
+      center: centroid(f.geometry), geom: f.geometry
+    };
+  });
+  alertsData.sort(function (x, y) {
+    var d = (SEV_RANK[x.severity] != null ? SEV_RANK[x.severity] : 5) -
+            (SEV_RANK[y.severity] != null ? SEV_RANK[y.severity] : 5);
+    if (d) return d;
+    return (x.expires ? x.expires.getTime() : Infinity) - (y.expires ? y.expires.getTime() : Infinity);
+  });
+  drawAlertPolys();
+  buildAlertsTable();
+  var atab = document.getElementById("tab-alerts");
+  if (atab) atab.textContent = "Alerts (" + alertsData.length + ")";
+  reapplyAlertSelection();
+}
+
+function drawAlertPolys() {
+  alertLayer.clearLayers(); alertRefs = {};
+  if (!document.getElementById("c-alerts").checked) return;
+  alertsData.forEach(function (a, i) {
+    if (!a.geom) return;
+    var col = alertColor(a.severity);
+    var poly = L.geoJSON(a.geom, { pane:"alerts",
+      style:{ color:col, weight:1.5, fill:true, fillColor:col, fillOpacity:0.10, dashArray:"4 4" } }).addTo(alertLayer);
+    poly.on("click", function () { selectAlert(i, true); });
+    alertRefs[i] = { poly: poly, center: a.center };
+  });
+}
+
+function buildAlertsTable() {
+  var body = document.getElementById("alertsbody");
+  if (!alertsData.length) {
+    body.innerHTML = '<div class="empty">No active NWS alerts with mapped areas in view. ' +
+      'Pan to an area of active weather, or zoom out to widen the search.</div>';
+    return;
+  }
+  body.innerHTML = alertsData.map(function (a, i) {
+    var areaParts = a.area.split(";");
+    var area = esc(areaParts.slice(0, 3).join("; ")) + (areaParts.length > 3 ? " …" : "");
+    return '<div class="alertcard sev-' + a.severity.toLowerCase() + '" data-aid="' + i + '">' +
+      '<div class="ah"><span class="asev" style="background:' + alertColor(a.severity) + '">' + esc(a.severity) + '</span>' +
+        '<span class="aevent">' + esc(a.event) + '</span>' +
+        '<span class="aexp">' + (a.expires ? "exp " + esc(fmtLocal(a.expires)) : "") + '</span></div>' +
+      '<div class="aarea">' + area + '</div>' +
+      '<div class="adetail">' +
+        (a.headline ? '<div class="ahl">' + esc(a.headline) + '</div>' : '') +
+        '<pre class="adesc">' + esc(a.desc || "(no description provided)") + '</pre>' +
+        (a.instr ? '<div class="ainst"><b>PRECAUTIONARY/PREPAREDNESS ACTIONS:</b> ' + esc(a.instr) + '</div>' : '') +
+        '<div class="ameta">' + esc(a.sender) +
+          (a.effective ? " · from " + esc(fmtLocal(a.effective)) : "") +
+          (a.expires ? " · until " + esc(fmtLocal(a.expires)) : "") + '</div>' +
+      '</div></div>';
+  }).join("");
+  body.querySelectorAll(".alertcard").forEach(function (c) {
+    c.querySelector(".ah").addEventListener("click", function () {
+      selectAlert(parseInt(c.getAttribute("data-aid"), 10), false);
+    });
+  });
+}
+
+function highlightAlert(a) {
+  alertSelLayer.clearLayers();
+  if (!a || !a.geom) return;
+  var col = alertColor(a.severity);
+  L.geoJSON(a.geom, { pane:"warn", style:{ color:col, weight:4, fill:true, fillColor:col, fillOpacity:0.28 } }).addTo(alertSelLayer);
+}
+
+function selectAlert(i, fromMap) {
+  var a = alertsData[i]; if (!a) return;
+  selectedAlertUid = a.uid;
+  highlightAlert(a);
+  document.querySelectorAll(".alertcard").forEach(function (c) {
+    c.classList.toggle("open", c.getAttribute("data-aid") === String(i));
+  });
+  if (a.center) map.flyTo(a.center, Math.max(map.getZoom(), 7), { duration:0.6 });
+  if (fromMap) showTab("alerts");
+  var card = document.querySelector('.alertcard[data-aid="' + i + '"]');
+  if (card) card.scrollIntoView({ block:"nearest" });
+  if (isMobile() && fromMap) document.getElementById("mapwrap").scrollIntoView({ behavior:"smooth", block:"start" });
+}
+
+/* keep the highlight + open card after a data refresh, matching by stable alert id */
+function reapplyAlertSelection() {
+  if (selectedAlertUid == null) return;
+  var i = -1;
+  for (var k = 0; k < alertsData.length; k++) if (alertsData[k].uid === selectedAlertUid) { i = k; break; }
+  if (i < 0) { alertSelLayer.clearLayers(); return; }
+  highlightAlert(alertsData[i]);
+  var card = document.querySelector('.alertcard[data-aid="' + i + '"]');
+  if (card) card.classList.add("open");
+}
+
+/* ===================== STORM PANEL TABS ===================== */
+function showTab(which) {
+  var isText = which === "text", isAlerts = which === "alerts", isTable = !isText && !isAlerts;
+  document.getElementById("tablebody").style.display = isTable ? "" : "none";
+  document.getElementById("textreadout").style.display = isText ? "" : "none";
+  document.getElementById("alertsbody").style.display = isAlerts ? "" : "none";
+  document.getElementById("tab-table").classList.toggle("active", isTable);
+  document.getElementById("tab-text").classList.toggle("active", isText);
+  document.getElementById("tab-alerts").classList.toggle("active", isAlerts);
+}
+document.getElementById("tab-table").addEventListener("click", function () { showTab("table"); });
+document.getElementById("tab-text").addEventListener("click", function () { showTab("text"); });
+document.getElementById("tab-alerts").addEventListener("click", function () { showTab("alerts"); });
+document.getElementById("c-alerts").addEventListener("change", function () { drawAlertPolys(); reapplyAlertSelection(); });
 
 document.getElementById("refresh").addEventListener("click", function () {
   var src = document.getElementById("product").options[document.getElementById("product").selectedIndex].getAttribute("data-src");

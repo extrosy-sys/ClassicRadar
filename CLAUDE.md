@@ -139,6 +139,22 @@ toolset** (`#srvtool`) to slide through the tilts, toggle the product, and close
   Verified live at KJKL: z9 = 39 paths/21 ticks, z8 = 84 paths/0 ticks, z7 = tracks thinned to the
   significant few. `TRACK_MIN_ZOOM`=7 still gates the Level III fetch.
 
+## Verbose weather-alerts table (map-linked)
+Third storm-panel tab **"Alerts (N)"** (beside Storm Attribute Table / Level III Text): every active NWS
+alert — all event types (warnings, watches, advisories, statements) — whose polygon intersects the view,
+with the full verbose text. `fetchAllAlertsCached` pulls the national `alerts/active?status=actual&
+message_type=alert` once per 60 s (`alertsCache`), `loadAlerts` re-filters to the padded view by
+`geomBBox` intersect (called from `loadStormData`, non-blocking + on every pan). `renderAlerts` sorts by
+severity then expiry; `buildAlertsTable` renders one expandable card per alert (severity chip colored by
+`SEV_COLOR`, event, expiry, areaDesc; click the header → open the headline + full description + PRECAUTIONARY
+instructions + sender/effective/expires). Map link both ways: `drawAlertPolys` draws every in-view alert
+area on the **`alerts` pane** (z380, below warn) when the **"All weather-alert areas"** clutter toggle
+(`c-alerts`, default off) is on, each clickable → `selectAlert(i, fromMap)` opens its card + switches to the
+tab; clicking a card highlights that alert on the `alertSelLayer` (warn pane, bold) and `flyTo`s it.
+`selectedAlertUid` + `reapplyAlertSelection` keep the highlight/open-card across data refreshes (matched by
+stable alert id). `esc()` HTML-escapes all alert text. Verified live near KJKL: 21 in-view alerts, full
+921-char description + instructions, severity sort, both link directions, 29 area polygons. Web-only so far.
+
 ## Satellite & 2D reliability
 - **Satellite** (NASA GIBS / GOES-East, keyless, full-disk): products "Infrared (cloud tops)" =
   `GOES-East_ABI_Band13_Clean_Infrared` (Level6) and "GeoColor (visible)" = `GOES-East_ABI_GeoColor`

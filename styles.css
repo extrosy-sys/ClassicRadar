@@ -218,6 +218,28 @@ table.storm td.id, table.storm td.dir, table.storm td.ev { text-align: left; }
 table.storm tbody tr:nth-child(even) { background: #f4f6fa; }
 table.storm tbody tr.sel { background: #fff2b0; }
 table.storm tbody tr:hover { background: #dbe7ff; cursor: pointer; }
+
+/* ---- verbose weather-alerts table ---- */
+#alertsbody { font-family: "Courier New", monospace; font-size: 11px; color: #101820; }
+#alertsbody .empty { padding: 12px; color: #667; }
+.alertcard { border-bottom: 1px solid #d3d8e0; border-left: 5px solid #7f8fa6; }
+.alertcard.sev-extreme  { border-left-color: #e0004d; }
+.alertcard.sev-severe   { border-left-color: #e01f1f; }
+.alertcard.sev-moderate { border-left-color: #e8820c; }
+.alertcard.sev-minor    { border-left-color: #c9a800; }
+.alertcard .ah { display: flex; align-items: center; gap: 6px; padding: 4px 8px; cursor: pointer; }
+.alertcard .ah:hover { background: #eef2f8; }
+.alertcard.open .ah { background: #e4ecf7; }
+.alertcard .asev { color: #fff; font-size: 9px; font-weight: bold; padding: 1px 5px; border-radius: 2px; text-transform: uppercase; }
+.alertcard .aevent { font-weight: bold; color: #12203a; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.alertcard .aexp { color: #667; white-space: nowrap; font-size: 10px; }
+.alertcard .aarea { padding: 0 8px 4px 8px; color: #445; font-size: 10px; }
+.alertcard .adetail { display: none; padding: 6px 10px 10px; background: #f7f9fc; border-top: 1px dashed #cfd6e0; }
+.alertcard.open .adetail { display: block; }
+.alertcard .ahl { font-weight: bold; color: #7a1f1f; margin-bottom: 4px; }
+.alertcard .adesc { white-space: pre-wrap; word-wrap: break-word; font-size: 11px; margin: 0 0 6px; color: #1a2634; max-height: 240px; overflow: auto; }
+.alertcard .ainst { color: #0a4a2a; margin-bottom: 5px; }
+.alertcard .ameta { color: #778; font-size: 10px; }
 .threat { font-weight: bold; padding: 0 2px; }
 .t-tor { color: #7a1fa2; }   /* TVS / tornado */
 .t-meso { color: #b06a00; }  /* mesocyclone */

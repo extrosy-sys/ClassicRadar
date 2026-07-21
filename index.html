@@ -118,6 +118,7 @@
         <div class="checkline"><input type="checkbox" id="c-hwy"><label for="c-hwy">Highways</label></div>
         <div class="checkline"><input type="checkbox" id="c-city" checked><label for="c-city">City / place labels</label></div>
         <div class="checkline"><input type="checkbox" id="c-warn" checked><label for="c-warn">NWS warning polygons</label></div>
+        <div class="checkline"><input type="checkbox" id="c-alerts"><label for="c-alerts">All weather-alert areas</label></div>
         <div class="checkline"><input type="checkbox" id="c-cells" checked><label for="c-cells">Storm-cell markers</label></div>
         <div class="checkline"><input type="checkbox" id="c-tracks" checked><label for="c-tracks">Level III forecast tracks</label></div>
         <div class="checkline"><input type="checkbox" id="c-sites" checked><label for="c-sites">Radar site icons</label></div>
@@ -190,12 +191,16 @@
     <div id="tablewrap">
       <div id="tablebar">
         <button class="tabbtn active" id="tab-table">Storm Attribute Table</button>
+        <button class="tabbtn" id="tab-alerts">Alerts</button>
         <button class="tabbtn" id="tab-text">Level III Text</button>
         <span class="spacer"></span>
         <span class="status" id="tablestatus">&nbsp;</span>
       </div>
       <div id="tablebody">
         <div class="empty">Loading storm interrogation data&hellip;</div>
+      </div>
+      <div id="alertsbody" style="display:none">
+        <div class="empty">Loading active NWS alerts&hellip;</div>
       </div>
       <pre id="textreadout" style="display:none">Select a NEXRAD site with active storms to load the raw Level III storm-track text.</pre>
     </div>
