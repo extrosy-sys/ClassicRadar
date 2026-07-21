@@ -246,32 +246,54 @@ table.storm tbody tr:hover { background: #dbe7ff; cursor: pointer; }
 }
 #tilestatus.err { background: rgba(140,20,20,0.92); border-color: #e88; }
 
-/* Doppler velocity overlay chip (top-center) */
-#velchip {
-  position: absolute; z-index: 500; left: 50%; transform: translateX(-50%);
-  top: 8px; padding: 4px 8px; border-radius: 3px;
+/* single-radar tilt viewer toolset (top-right) */
+#srvtool {
+  position: absolute; z-index: 500; top: 8px; right: 8px; width: 148px;
+  padding: 7px 8px; border-radius: 4px;
   font-family: "Courier New", monospace; font-size: 11px; color: #fff;
-  background: rgba(20,20,20,0.86); border: 1px solid #666;
-  display: flex; align-items: center; gap: 8px;
+  background: rgba(18,18,18,0.9); border: 1px solid #6a6a6a;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.5);
 }
-#velchip b { color: #ffd23f; }
-#velchip .vscale { display: inline-flex; align-items: center; gap: 3px; opacity: 0.9; }
-#velchip .vscale i { width: 12px; height: 11px; display: inline-block; }
-#velchip .vin  { background: #1ad24d; }   /* toward -> green */
-#velchip .vout { background: #d21f1f; }   /* away   -> red   */
-#velchip #velclose {
+#srvtool .srv-hd { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+#srvtool .srv-hd b { color: #ffd23f; font-size: 13px; letter-spacing: 0.5px; }
+#srvtool #srv-close {
   background: #333; color: #fff; border: 1px solid #777; border-radius: 2px;
-  width: 18px; height: 18px; line-height: 1; cursor: pointer; padding: 0; font-size: 13px;
+  width: 20px; height: 20px; line-height: 1; cursor: pointer; padding: 0; font-size: 15px;
 }
-#velchip #velclose:hover { background: #a33; }
+#srvtool #srv-close:hover { background: #a33; }
+#srvtool .srv-mode { display: flex; gap: 0; margin-bottom: 7px; }
+#srvtool .srv-mode button {
+  flex: 1; font: 11px "Courier New", monospace; padding: 4px 0; cursor: pointer;
+  background: #2a2a2a; color: #ccc; border: 1px solid #555;
+}
+#srvtool .srv-mode button:first-child { border-radius: 3px 0 0 3px; border-right: none; }
+#srvtool .srv-mode button:last-child  { border-radius: 0 3px 3px 0; }
+#srvtool .srv-mode button.on { background: #1d5fb0; color: #fff; border-color: #3d82d6; }
+#srvtool .srv-body { display: flex; gap: 9px; align-items: stretch; }
+#srvtool .srv-tiltcol { display: flex; flex-direction: column; align-items: center; }
+#srvtool #srv-tilt {
+  -webkit-appearance: slider-vertical; appearance: slider-vertical;
+  writing-mode: vertical-lr; direction: rtl;
+  width: 20px; height: 84px; cursor: pointer; accent-color: #3d82d6;
+}
+#srvtool .srv-cap { font-size: 9px; color: #999; margin-top: 3px; text-transform: uppercase; }
+#srvtool .srv-read { flex: 1; display: flex; flex-direction: column; justify-content: flex-start; }
+#srvtool .srv-elev { font-size: 20px; font-weight: bold; color: #fff; line-height: 1; }
+#srvtool .srv-sub { font-size: 10px; color: #9ab; margin: 1px 0 6px; }
+#srvtool .srv-legend { font-size: 9px; color: #ccc; line-height: 1.7; }
+#srvtool .srv-legend .lk { display: inline-block; width: 11px; height: 9px; margin: 0 3px 0 1px; vertical-align: middle; }
+#srvtool .srv-legend .vin  { background: #1ad24d; }   /* toward -> green */
+#srvtool .srv-legend .vout { background: #d21f1f; }   /* away   -> red   */
+#srvtool .srv-status { margin-top: 6px; font-size: 10px; color: #ffd23f; }
 
-/* radar site icons on the map */
+/* radar site icons on the map — enlarged for visibility */
 .siteicon .sdot {
-  display: block; width: 7px; height: 7px; border-radius: 50%;
-  background: #123a6b; border: 1.5px solid #fff; box-shadow: 0 0 2px #000; cursor: pointer;
+  display: block; width: 11px; height: 11px; border-radius: 50%;
+  background: #1552a8; border: 2px solid #fff;
+  box-shadow: 0 0 0 1px #000, 0 0 4px 1px rgba(0,0,0,0.7); cursor: pointer;
 }
-.siteicon.tdwr .sdot { background: #9c1f7a; border-radius: 1px; }
-.siteicon:hover .sdot { background: #ffd23f; transform: scale(1.4); }
+.siteicon.tdwr .sdot { background: #c21f96; border-radius: 2px; }
+.siteicon:hover .sdot { background: #ffd23f; transform: scale(1.45); box-shadow: 0 0 0 1px #000, 0 0 6px 2px rgba(255,210,63,0.8); }
 .sitepop { font-size: 11px; line-height: 1.35; }
 .sitepop button { font-size: 11px; margin-top: 5px; margin-right: 4px; padding: 2px 6px; cursor: pointer; }
 

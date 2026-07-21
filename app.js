@@ -133,7 +133,7 @@ function currentProductSrc() {
   return p.options[p.selectedIndex].getAttribute("data-src");
 }
 function syncIem() {
-  if (velActive) { showIem(false); return; }             // velocity overlay owns the radar layer
+  if (srvActive) { showIem(false); return; }             // single-radar overlay owns the radar layer
   var manual = document.getElementById("c-iem").checked;
   if (currentProductSrc() !== "rv") { showIem(manual); return; }
   showIem(manual || !usingFrames);      // reliable IEM base whenever not actively looping
@@ -147,13 +147,23 @@ function showIem(on) {
   }
 }
 
-/* ===== single-radar Doppler velocity overlay (click a radar site) =====
-   Reuses the SAME super-res Level III velocity decode as the 3D view
-   (Level3.fetchTilt N0G): fetch the base 0.5° velocity radials, render them to a
-   georeferenced canvas, and drop it on the map as an image overlay. Velocity is
-   RADIAL, so it's a single-radar product — green = toward the radar, red = away. */
-var velOverlay = null, velActive = false, velInfo = null;
-var VEL_MAX_KM = 230;
+/* ===== single-radar tilt viewer (click a radar site) =====
+   Renders ONE radar's super-res Level III tilt — reflectivity OR velocity — client-side
+   using the SAME decode as the 3D view (Level3.fetchTilt), as a georeferenced canvas
+   image overlay. A top-right toolset (#srvtool) slides through the 4 tilts, toggles the
+   product, and closes back to the national composite. Single-radar by nature: velocity is
+   radial (green=toward/red=away); reflectivity is this site's own base scan. */
+var srvOverlay = null, srvActive = false;
+var srv = { site: null, mode: "refl", tilt: 0, elevs: [] };
+var SRV_MAX_KM = 230;
+var SRV_PRODUCTS = {
+  refl: { codes: ["N0B","N1B","N2B","N3B"], label: "Reflectivity",
+    keep: function (L) { return L >= 2 && (0.5 * L - 33) >= 5; },         // dBZ floor 5
+    color: function (L) { return dbzColor(0.5 * L - 33); } },
+  vel:  { codes: ["N0G","N1G","N2G","N3G"], label: "Velocity",
+    keep: function (L) { return L >= 2 && L !== 255; },                   // 0 below-thr, 1 range-folded, 255 no-data
+    color: function (L) { return velColor((L - 129) * 0.5); } }
+};
 
 function velColor(v) {                                   // matches the 3D velocity ramp
   var a = Math.min(1, Math.abs(v) / 35);
@@ -161,26 +171,37 @@ function velColor(v) {                                   // matches the 3D veloc
     ? "rgb(26," + Math.round((0.35 + 0.65 * a) * 255) + ",77)"    // inbound  -> green
     : "rgb(" + Math.round((0.35 + 0.65 * a) * 255) + ",31,31)";   // outbound -> red
 }
-
-function clearVelocity(restore) {
-  if (velOverlay) { map.removeLayer(velOverlay); velOverlay = null; }
-  velActive = false; velInfo = null;
-  var chip = document.getElementById("velchip"); if (chip) chip.style.display = "none";
-  if (restore !== false) syncIem();                      // bring the reflectivity layer back
+function dbzColor(v) {                                   // NWS ramp (DBZ_RAMP) -> rgb()
+  var hex = DBZ_RAMP[0][1];
+  for (var i = 0; i < DBZ_RAMP.length; i++) if (v >= DBZ_RAMP[i][0]) hex = DBZ_RAMP[i][1];
+  hex = hex.replace("#", "");
+  return "rgb(" + parseInt(hex.substr(0,2),16) + "," + parseInt(hex.substr(2,2),16) + "," + parseInt(hex.substr(4,2),16) + ")";
 }
 
-function showVelocity(s) {
-  var site3 = Level3.site3(s.id);
-  setTileStatus("Fetching Doppler velocity for " + s.id + "…", "");
-  Level3.fetchTilt(site3, "N0G").then(function (t) {
-    if (!t || !t.radials || !t.radials.length) { setTileStatus(s.id + ": no velocity data available", "err"); return; }
-    renderVelocity(s, t);
-  }).catch(function (e) { setTileStatus(s.id + " velocity failed: " + e.message, "err"); });
+function openSingleRadar(s, mode) {
+  srv.site = s; srv.mode = (mode === "vel" ? "vel" : "refl"); srv.tilt = 0; srv.elevs = [];
+  buildSrvTool();
+  map.setView([s.lat, s.lon], Math.min(Math.max(map.getZoom(), 7), 9));   // regional view on the radar
+  srvLoadTilt();
 }
 
-function renderVelocity(s, t) {
+function srvLoadTilt() {
+  var s = srv.site, p = SRV_PRODUCTS[srv.mode], code = p.codes[srv.tilt];
+  setSrvStatus("Loading " + p.label.toLowerCase() + " tilt " + (srv.tilt + 1) + "…");
+  Level3.fetchTilt(Level3.site3(s.id), code).then(function (t) {
+    if (srv.site !== s || SRV_PRODUCTS[srv.mode].codes[srv.tilt] !== code) return;   // superseded by a newer click
+    if (!t || !t.radials || !t.radials.length) { setSrvStatus("no data for tilt " + (srv.tilt + 1)); return; }
+    srv.elevs[srv.tilt] = t.elevation;
+    renderTilt(t);
+    setSrvStatus("");
+    updateSrvLabels();
+  }).catch(function (e) { setSrvStatus("failed: " + e.message); });
+}
+
+function renderTilt(t) {
+  var p = SRV_PRODUCTS[srv.mode];
   var lat = t.radarLat, lon = t.radarLon, gk = t.gateKm;
-  var maxKm = Math.min(t.nbins * gk, VEL_MAX_KM);
+  var maxKm = Math.min(t.nbins * gk, SRV_MAX_KM);
   var W = 1200, H = 1200, cx = W / 2, cy = H / 2, pxPerKm = (W / 2) / maxKm;
   var cv = document.createElement("canvas"); cv.width = W; cv.height = H;
   var ctx = cv.getContext("2d");
@@ -191,33 +212,74 @@ function renderVelocity(s, t) {
     var a = (r.az - 90) * D, a0 = a - hw, a1 = a + hw, lv = r.levels, n = Math.min(lv.length, maxG);
     for (var g = 0; g < n; g++) {
       var L = lv[g];
-      if (L < 2 || L === 255) continue;                  // 0 below-threshold, 1 range-folded, 255 no-data
-      ctx.strokeStyle = velColor((L - 129) * 0.5);       // m/s = (level-129)*0.5
+      if (!p.keep(L)) continue;
+      ctx.strokeStyle = p.color(L);
       var rp = (g + 0.5) * gk * pxPerKm;
       ctx.beginPath(); ctx.arc(cx, cy, rp, a0, a1); ctx.stroke();
     }
   });
   var dLat = maxKm / 111.32, dLon = maxKm / (111.32 * Math.cos(lat * Math.PI / 180));
   var bounds = [[lat - dLat, lon - dLon], [lat + dLat, lon + dLon]];
-  clearVelocity(false);                                  // remove any previous overlay, keep reflectivity hidden
-  velActive = true;
-  showIem(false);
-  if (usingFrames) buffers.forEach(function (l) { l.setOpacity(0); });   // hide the reflectivity loop under it
-  velOverlay = L.imageOverlay(cv.toDataURL("image/png"), bounds,
+  if (srvOverlay) { map.removeLayer(srvOverlay); srvOverlay = null; }
+  srvActive = true;
+  showIem(false);                                        // the single-radar overlay owns the radar layer
+  if (usingFrames) buffers.forEach(function (l) { l.setOpacity(0); });
+  srvOverlay = L.imageOverlay(cv.toDataURL("image/png"), bounds,
     { pane: "velocity", opacity: radarOpacity(), interactive: false }).addTo(map);
-  velInfo = { site: s, elevation: t.elevation };
-  map.setView([lat, lon], Math.min(Math.max(map.getZoom(), 7), 9));      // regional view centered on the radar
-  showVelChip(s, t.elevation);
-  setTileStatus("", "");
 }
 
-function showVelChip(s, elev) {
-  var chip = document.getElementById("velchip"); if (!chip) return;
-  chip.innerHTML = '<b>' + s.id + '</b> Base Velocity ' + (elev ? elev.toFixed(1) : "0.5") + '&deg;' +
-    ' <span class="vscale"><i class="vin"></i>toward&nbsp;&nbsp;<i class="vout"></i>away</span>' +
-    ' <button id="velclose" title="Clear velocity">&times;</button>';
-  chip.style.display = "block";
-  document.getElementById("velclose").onclick = function () { clearVelocity(true); };
+function closeSingleRadar(restore) {
+  if (srvOverlay) { map.removeLayer(srvOverlay); srvOverlay = null; }
+  srvActive = false; srv.site = null;
+  var tl = document.getElementById("srvtool"); if (tl) tl.style.display = "none";
+  var lg = document.getElementById("legend"); if (lg) lg.style.display = "";
+  if (restore !== false) syncIem();                      // back to the national composite
+}
+
+/* ---- top-right toolset ---- */
+function buildSrvTool() {
+  var tl = document.getElementById("srvtool"); if (!tl) return;
+  tl.innerHTML =
+    '<div class="srv-hd"><b id="srv-site"></b><button id="srv-close" title="Return to composite">&times;</button></div>' +
+    '<div class="srv-mode"><button id="srv-refl">Refl</button><button id="srv-vel">Vel</button></div>' +
+    '<div class="srv-body">' +
+      '<div class="srv-tiltcol"><input id="srv-tilt" type="range" min="0" max="3" step="1" value="0" orient="vertical"><span class="srv-cap">tilt</span></div>' +
+      '<div class="srv-read"><div id="srv-elev" class="srv-elev">--</div><div id="srv-tnum" class="srv-sub">1/4</div><div id="srv-legend" class="srv-legend"></div></div>' +
+    '</div>' +
+    '<div id="srv-status" class="srv-status" style="display:none"></div>';
+  tl.style.display = "block";
+  document.getElementById("srv-close").onclick = function () { closeSingleRadar(true); };
+  document.getElementById("srv-refl").onclick = function () { setSrvMode("refl"); };
+  document.getElementById("srv-vel").onclick  = function () { setSrvMode("vel"); };
+  var tilt = document.getElementById("srv-tilt");
+  tilt.value = srv.tilt;
+  tilt.oninput = function () { srv.tilt = parseInt(this.value, 10); updateSrvLabels(); srvLoadTilt(); };
+  updateSrvLabels();
+}
+function setSrvMode(m) {
+  if (srv.mode === m || !srv.site) return;
+  srv.mode = m; srv.elevs = [];
+  updateSrvLabels(); srvLoadTilt();
+}
+function updateSrvLabels() {
+  if (!srv.site) return;
+  var el = document.getElementById("srv-site"); if (el) el.textContent = srv.site.id;
+  document.getElementById("srv-refl").classList.toggle("on", srv.mode === "refl");
+  document.getElementById("srv-vel").classList.toggle("on", srv.mode === "vel");
+  document.getElementById("srv-tilt").value = srv.tilt;
+  document.getElementById("srv-tnum").textContent = (srv.tilt + 1) + "/4";
+  var e = srv.elevs[srv.tilt];
+  document.getElementById("srv-elev").textContent = (e != null ? e.toFixed(1) + "°" : "…");
+  document.getElementById("srv-legend").innerHTML = srv.mode === "vel"
+    ? '<span class="lk vin"></span>toward<br><span class="lk vout"></span>away'
+    : '<span class="lk" style="background:#0300f4"></span>15<span class="lk" style="background:#02fd02"></span>25' +
+      '<span class="lk" style="background:#fdf802"></span>40<span class="lk" style="background:#fd0000"></span>55+';
+  var lg = document.getElementById("legend");             // hide the dBZ scale while in velocity
+  if (lg) lg.style.display = (srv.mode === "vel") ? "none" : "";
+}
+function setSrvStatus(m) {
+  var e = document.getElementById("srv-status"); if (!e) return;
+  e.textContent = m || ""; e.style.display = m ? "block" : "none";
 }
 
 /* --- RainViewer: fetch frame catalog, build animated (historical) tile layers.
@@ -264,7 +326,7 @@ var usingFrames = false;   // true while showing the RainViewer loop; false = re
 
 /* return to the reliable IEM current scan (shown at every zoom) */
 function goLive() {
-  if (velActive) clearVelocity(false);                   // LIVE returns to reflectivity
+  if (srvActive) closeSingleRadar(false);                // LIVE returns to the composite
   usingFrames = false;
   buffers.forEach(function (l) { l.setOpacity(0); });
   if (currentProductSrc() === "rv") showIem(true);
@@ -330,7 +392,7 @@ function applyProduct() {
   var src = opt.getAttribute("data-src");
   var note = document.getElementById("prodnote");
   pause();
-  if (velActive) clearVelocity(false);                   // changing product drops the velocity overlay
+  if (srvActive) closeSingleRadar(false);                // changing product drops the single-radar overlay
 
   if (src === "rv") {
     clearSat();
@@ -443,7 +505,7 @@ function buildSiteMarkers() {
     if (s.lat == null) return;
     var m = L.marker([s.lat, s.lon], { pane:"sites", icon: L.divIcon({
       className: "siteicon " + (s.net === "TDWR" ? "tdwr" : "nexrad"),
-      iconSize: [7, 7], iconAnchor: [3.5, 3.5], html: '<span class="sdot"></span>' }) });
+      iconSize: [11, 11], iconAnchor: [5.5, 5.5], html: '<span class="sdot"></span>' }) });
     m.bindTooltip(s.id + " — " + s.name, { direction: "top", offset: [0, -5] });
     m.on("click", function () { openSitePopup(s); });
     siteLayer.addLayer(m);
@@ -453,14 +515,18 @@ function buildSiteMarkers() {
 function openSitePopup(s) {
   var html = '<div class="sitepop"><b>' + s.id + '</b> &middot; ' + s.net + '<br>' + s.name + '<br>' +
     s.lat.toFixed(3) + '&deg;, ' + s.lon.toFixed(3) + '&deg;<br>' +
-    '<button class="sp-go">Open this radar</button>' +
-    (s.net === "WSR-88D" ? '<button class="sp-vel">Velocity</button><button class="sp-3d">3D volume</button>' : '') + '</div>';
+    (s.net === "WSR-88D"
+      ? '<button class="sp-single">Open this radar</button><button class="sp-vel">Velocity</button><button class="sp-3d">3D volume</button>'
+      : '<button class="sp-go">Center on this radar</button>') + '</div>';
   L.popup({ offset: [0, -4] }).setLatLng([s.lat, s.lon]).setContent(html).openOn(map);
   setTimeout(function () {
     var el = document.querySelector(".sitepop"); if (!el) return;
-    el.querySelector(".sp-go").onclick = function () { map.closePopup(); selectSite(s); };
-    var bv = el.querySelector(".sp-vel");
-    if (bv) bv.onclick = function () { map.closePopup(); showVelocity(s); };
+    var bg = el.querySelector(".sp-go");
+    if (bg) bg.onclick = function () { map.closePopup(); selectSite(s); };
+    var bs = el.querySelector(".sp-single");     // single-radar tilt viewer, reflectivity
+    if (bs) bs.onclick = function () { map.closePopup(); openSingleRadar(s, "refl"); };
+    var bv = el.querySelector(".sp-vel");         // ...same viewer, velocity
+    if (bv) bv.onclick = function () { map.closePopup(); openSingleRadar(s, "vel"); };
     var b3 = el.querySelector(".sp-3d");
     if (b3) b3.onclick = function () { map.closePopup(); Volume3D.open(Level3.site3(s.id), s.id + " — " + s.name, "refl"); };
   }, 0);
@@ -869,7 +935,7 @@ document.getElementById("opacity").addEventListener("input", function () {
   if (iemLayer) iemLayer.setOpacity(radarOpacity());
   if (satLayer) satLayer.setOpacity(radarOpacity());
   if (usingFrames && buffers.length) buffers[frontBuf].setOpacity(radarOpacity());
-  if (velOverlay) velOverlay.setOpacity(radarOpacity());
+  if (srvOverlay) srvOverlay.setOpacity(radarOpacity());
 });
 
 function toggleLayer(cb, layer) {

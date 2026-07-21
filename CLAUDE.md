@@ -91,25 +91,34 @@ live (`setSurfaceOpacity`); threshold/Fill/V× rebuild. Grid 104×104×28 over �
     different algorithm entirely). Only reflectivity (a perspective-independent scalar) is combined;
     velocity stays single-radar. Verified: KTLX velocity = 1 radar, KTLX reflectivity = 4 combined.
 
-## 2D Doppler velocity (click a radar)
-Each WSR-88D site popup ("Radar site icons") has a **Velocity** button alongside "Open this radar"
-/ "3D volume". It reuses the *same* super-res Level III velocity decode as the 3D view
-(`Level3.fetchTilt(site3,"N0G")`) but renders the base 0.5° tilt as a flat, georeferenced map layer:
-- `renderVelocity` draws each radial onto a 1200² offscreen canvas — one annular arc-stroke per gate
-  (canvas angle = `az−90°`, exactly; lineWidth = one gate's radial depth), colored on the same ramp as
-  3D (green = toward / inbound `v<0`, red = away / outbound `v>0`, m/s=(level−129)·0.5, skip
-  levels 0/1/255). Canvas → `toDataURL` → `L.imageOverlay` on a dedicated **`velocity` pane** (z260,
-  above reflectivity, below the city labels), bounds = radar lat/lon ± (maxRange km → deg, range capped
-  `VEL_MAX_KM`=230). Flat-earth km→deg placement is self-consistent with the overlay bounds so gates land
-  correctly (mercator stretch over 230 km is negligible).
-- Velocity is **single-radar** (radial measurement — never combined; see the 3D note). While it's up it
-  *owns the radar layer*: `showVelocity`→`renderVelocity` hides IEM + the RainViewer buffers, `syncIem`
-  early-returns on `velActive` (so a zoom doesn't bring reflectivity back under it). A top-center **chip**
-  (`#velchip`) shows the site + tilt + a green↔red toward/away key and an **×** to dismiss. `clearVelocity`
-  (also fired by ◉ LIVE and any product change) removes the overlay and restores reflectivity via
-  `syncIem`. The radar-opacity slider drives the overlay too. Verified live: KABR base velocity, 1200²
-  data-URL overlay, 17.7% coverage with both inbound (green) and outbound (red) returns, reflectivity
-  hidden underneath, × restores it — no console errors. Android app is 2D reflectivity only (no velocity).
+## Single-radar tilt viewer (click a radar) — reflectivity + velocity, with a toolset
+Each WSR-88D site popup ("Radar site icons") has **Open this radar** (opens the single-radar view in
+reflectivity), **Velocity** (same view in velocity), and **3D volume**. TDWR sites just get "Center on
+this radar". The single-radar view renders ONE radar's super-res Level III tilt client-side — the *same*
+decode the 3D view uses (`Level3.fetchTilt`) — as a flat georeferenced map overlay, plus a **top-right
+toolset** (`#srvtool`) to slide through the tilts, toggle the product, and close back to the composite.
+- `renderTilt` draws each radial onto a 1200² offscreen canvas — one annular arc-stroke per gate
+  (canvas angle = `az−90°`, exactly; lineWidth = one gate's radial depth). Product config `SRV_PRODUCTS`:
+  **refl** = codes N0B/N1B/N2B/N3B, dBZ = 0.5·L−33 on the NWS `DBZ_RAMP` (`dbzColor`), floor 5 dBZ; **vel**
+  = N0G/N1G/N2G/N3G, m/s=(L−129)·0.5, green toward / red away (`velColor`, skip levels 0/1/255). Canvas →
+  `toDataURL` → `L.imageOverlay` on the dedicated **`velocity` pane** (z260, above reflectivity, below the
+  city labels), bounds = radar lat/lon ± (maxRange km → deg, capped `SRV_MAX_KM`=230). Flat-earth km→deg
+  placement is self-consistent with the overlay bounds so gates land correctly (mercator stretch negligible).
+- **Toolset** (`buildSrvTool`/`updateSrvLabels`): site id, a Refl|Vel segmented toggle (`setSrvMode`), a
+  **vertical tilt slider** (0–3 → the 4 super-res tilt codes; up = higher tilt), a big **current-elevation**
+  readout (the *actual* decoded `t.elevation`, e.g. 0.5°/2.4°, filled once each tilt decodes — briefly "…"
+  while a slower velocity tilt is in flight), a mini legend (dBZ steps / green-red key), and a **×** close.
+  The bottom-right dBZ `#legend` auto-hides in velocity mode. `srvLoadTilt` guards against a stale fetch
+  (site/code changed mid-flight) so fast slider/toggle clicks never paint an old tilt.
+- **Single-radar** by nature (velocity is radial — never combined; reflectivity is this site's own scan).
+  While active it *owns the radar layer*: hides IEM + the RainViewer buffers, and `syncIem` early-returns on
+  `srvActive` so a zoom doesn't bring the composite back under it. `closeSingleRadar` (also fired by ◉ LIVE
+  and any product change) removes the overlay, restores the dBZ legend, and brings the composite back via
+  `syncIem`. The radar-opacity slider drives the overlay too. Verified live at KABR: refl tilt 1 (0.5°, 13.6%
+  cover), slider → tilt 3 shows the real 2.4°, toggle → velocity 0.5° with both inbound (green) + outbound
+  (red) couplet, × restores the composite + legend — no console errors. Android app is 2D reflectivity only.
+- **Radar site icons enlarged** for visibility: 11 px dots (was 7), 2 px white ring + dark halo; NEXRAD =
+  blue circle, TDWR = magenta rounded square; hover → amber glow.
 
 ## Satellite & 2D reliability
 - **Satellite** (NASA GIBS / GOES-East, keyless, full-disk): products "Infrared (cloud tops)" =
