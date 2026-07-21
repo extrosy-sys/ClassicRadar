@@ -187,6 +187,18 @@ stable alert id). `esc()` HTML-escapes all alert text. Verified live near KJKL: 
   the card header + a line in the detail). Verified live at KJKL: 43 callouts (▲48kft…), 43 table rows with
   tops, alert cards showing Tornado-Warning tops of 51-52 kft.
 
+## Persisted settings (localStorage)
+The map controls + view survive reloads via `localStorage["classicRadar.prefs.v1"]` (not a cookie —
+not sent to any server, no size cap, static site). `savePrefs` writes all clutter checkboxes
+(`PREF_CHECKS`), the product/frames/speed/dwell/network selects (`PREF_SELECTS`), radar opacity, and the
+map center/zoom on any control `change` or map `moveend` (wired by `wirePrefSaving`). At boot `restorePrefs`
+applies saved values BEFORE `applyProduct`/`loadWarnings` read them (guards: a `d3` volumetric product falls
+back to N0B so the 3D view doesn't auto-open; only valid option values are set); `restoredView` makes boot
+skip `centerOnSite`. `applyRestoredLayers` then dispatches each toggle's `change` (+ opacity `input`) so
+restored layer/opacity states actually take effect — saving is wired last so restore doesn't feed back.
+Verified: product NCR, frames 24, opacity 45, c-city off, c-watches/c-tops on, and the map view all restore
+across a reload and re-apply (composite tiles load, watches draw, labels hidden).
+
 ## Added weather products/overlays (2026-07-21, all toggle-able)
 - **SPC Day-1 Convective Outlook** (`c-outlook`, `outlook` pane z340): `loadOutlook` fetches the SPC
   categorical GeoJSON (`spc.noaa.gov/products/outlook/day1otlk_cat.nolyr.geojson`) — it ships its own

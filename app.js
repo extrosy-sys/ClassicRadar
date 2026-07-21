@@ -1622,12 +1622,65 @@ map.on("moveend", function () {
 });
 map.on("popupclose", function () { alertHoverLayer.clearLayers(); });   // drop any picker hover preview
 
+/* ===================== PERSISTENCE (localStorage) =====================
+   Remember the user's map controls + view across reloads. localStorage (not a cookie):
+   not sent to any server, no size limit, and this is a static site. */
+var PREFS_KEY = "classicRadar.prefs.v1";
+var PREF_CHECKS = ["c-base","c-county","c-hwy","c-city","c-warn","c-alerts","c-cells","c-tracks",
+                   "c-tops","c-watches","c-outlook","c-metar","c-sites","c-iem"];
+var PREF_SELECTS = ["product","frames","speed","dwell","network"];
+var restoredView = false;
+
+function loadPrefs() { try { return JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") || {}; } catch (e) { return {}; } }
+function savePrefs() {
+  try {
+    var p = { checks:{}, selects:{}, opacity: document.getElementById("opacity").value };
+    PREF_CHECKS.forEach(function (id) { var e = document.getElementById(id); if (e) p.checks[id] = e.checked; });
+    PREF_SELECTS.forEach(function (id) { var e = document.getElementById(id); if (e) p.selects[id] = e.value; });
+    var c = map.getCenter();
+    p.view = { lat: +c.lat.toFixed(4), lon: +c.lng.toFixed(4), zoom: map.getZoom() };
+    localStorage.setItem(PREFS_KEY, JSON.stringify(p));
+  } catch (e) {}
+}
+function optSrc(sel) {                                   // data-src of a select's current option
+  var o = sel.options[sel.selectedIndex]; return o ? o.getAttribute("data-src") : null;
+}
+function restorePrefs() {
+  var p = loadPrefs();
+  if (p.selects) PREF_SELECTS.forEach(function (id) {
+    var v = p.selects[id], e = document.getElementById(id);
+    if (e && v != null && [].some.call(e.options, function (o) { return o.value === v; })) e.value = v;
+  });
+  // don't auto-open the 3D volumetric view on load — fall back to base reflectivity
+  var prod = document.getElementById("product");
+  if (optSrc(prod) === "d3") prod.value = "N0B";
+  if (p.checks) PREF_CHECKS.forEach(function (id) { var e = document.getElementById(id); if (e && id in p.checks) e.checked = p.checks[id]; });
+  if (p.opacity != null) { var o = document.getElementById("opacity"); if (o) o.value = p.opacity; }
+  if (p.view && isFinite(p.view.lat) && isFinite(p.view.lon)) {
+    map.setView([p.view.lat, p.view.lon], p.view.zoom || map.getZoom());
+    restoredView = true;
+  }
+}
+function applyRestoredLayers() {
+  // fire each toggle so restored layer/opacity states actually take effect (saving not yet wired)
+  PREF_CHECKS.forEach(function (id) { var e = document.getElementById(id); if (e) e.dispatchEvent(new Event("change", { bubbles:true })); });
+  document.getElementById("opacity").dispatchEvent(new Event("input", { bubbles:true }));
+}
+function wirePrefSaving() {
+  PREF_CHECKS.concat(PREF_SELECTS).forEach(function (id) { var e = document.getElementById(id); if (e) e.addEventListener("change", savePrefs); });
+  document.getElementById("opacity").addEventListener("change", savePrefs);
+  map.on("moveend", savePrefs);
+}
+
 /* ============================= BOOT ============================= */
 buildLegend();
 startClock();
 setStatus("Loading radar sites…");
-loadStations().then(function () { buildSiteMarkers(); centerOnSite(); });
-applyProduct();     // default product = base reflectivity (IEM) live
+restorePrefs();     // apply saved control values + map view before anything reads them
+loadStations().then(function () { buildSiteMarkers(); if (!restoredView) centerOnSite(); });
+applyProduct();     // reads the restored product (default: base reflectivity / IEM live)
 loadWarnings();
+applyRestoredLayers();   // sync toggled layers + opacity to the restored state
+wirePrefSaving();        // from here on, any control/view change persists
 
 })();
