@@ -766,6 +766,29 @@ function fetchEETCached(site3) {
 }
 var loadWarnings = loadStormData;   // back-compat alias
 
+/* Storm-top callouts, de-cluttered by zoom: place the TALLEST tops first and skip any label
+   whose screen box would overlap one already placed — so zooming out keeps only the highest,
+   never a pile of overlapping boxes. Re-runs on every pan/zoom (renderStorm) with fresh pixels. */
+function drawTopCallouts(rows) {
+  topsLayer.clearLayers();
+  if (!document.getElementById("c-tops").checked) return;
+  var cells = rows.filter(function (r) { return r.center && r.top != null; })
+    .sort(function (a, b) { return b.top - a.top; });     // tallest first = highest priority
+  var placed = [];
+  cells.forEach(function (r) {
+    var p = map.latLngToContainerPoint(r.center);
+    var w = 34 + String(r.top).length * 7;                // ~ label width in px; label sits up-right of the cell
+    var box = { x1: p.x + 4, y1: p.y - 24, x2: p.x + 4 + w, y2: p.y - 8 };
+    for (var i = 0; i < placed.length; i++) {
+      var b = placed[i];
+      if (!(box.x2 < b.x1 || box.x1 > b.x2 || box.y2 < b.y1 || box.y1 > b.y2)) return;   // overlaps -> skip
+    }
+    placed.push(box);
+    L.marker(r.center, { pane:"tops", interactive:false, icon: L.divIcon({
+      className:"topcallout", iconSize:[0,0], html:'<span class="topbox">▲' + r.top + 'kft</span>' }) }).addTo(topsLayer);
+  });
+}
+
 function renderStorm(features, l3List, eetBySite) {
   eetBySite = eetBySite || {};
   warnLayer.clearLayers();
@@ -878,13 +901,10 @@ function renderStorm(features, l3List, eetBySite) {
       cellMarkers.push(marker);
       if (document.getElementById("c-cells").checked) marker.addTo(map);
     }
-    // storm-top callout (echo top from EET), toggleable clutter layer
-    if (r.center && r.top != null && document.getElementById("c-tops").checked) {
-      L.marker(r.center, { pane:"tops", interactive:false, icon: L.divIcon({
-        className:"topcallout", iconSize:[0,0], html:'<span class="topbox">▲' + r.top + 'kft</span>' }) }).addTo(topsLayer);
-    }
     cellRefs[r.key] = { marker:marker, poly:r._poly || null, color:r._color || "#4a6ea9", center:r.center };
   });
+
+  drawTopCallouts(rows);
 
   // remember cell tops so the alerts table can show the max echo top inside each alert area
   cellTops = rows.filter(function (r) { return r.top != null && r.center; })

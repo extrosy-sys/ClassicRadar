@@ -178,7 +178,10 @@ stable alert id). `esc()` HTML-escapes all alert text. Verified live near KJKL: 
   real-time Unidata bucket; EET IS, so tops come from EET.
 - **Per-cell tops**: `loadStormData` fetches EET (cached 3 min, `fetchEETCached`) only for radars that
   returned NST cells; `renderStorm` samples each cell's `top` at its (az, range). Surfaced three ways:
-  (a) **Storm-top callouts** map layer (`c-tops` toggle, `tops` pane z650, `.topbox` "▲NNkft" labels);
+  (a) **Storm-top callouts** map layer (`c-tops` toggle, `tops` pane z650, `.topbox` "▲NNkft" labels) —
+  de-cluttered by `drawTopCallouts`: sorts cells tallest-first and places a label only if its screen box
+  doesn't overlap one already placed, so zooming out keeps only the highest tops (re-runs per pan/zoom via
+  renderStorm→latLngToContainerPoint). Verified z8=21 / z7=36 callouts, 0 overlapping pairs, tallest first;
   (b) a **Top (kft)** column in the storm attribute table; (c) the **alerts table** — `cellTops` +
   `alertMaxTop`/`annotateAlertTops` show the max echo top of any cell inside each alert's polygon (a chip in
   the card header + a line in the detail). Verified live at KJKL: 43 callouts (▲48kft…), 43 table rows with
