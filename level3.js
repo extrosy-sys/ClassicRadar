@@ -70,6 +70,8 @@ window.Level3 = {
     var mhb = this._findMHB(body);
     if (mhb < 0) return null;
     var dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+    var radarLat = dv.getInt32(mhb + 20) / 1000;
+    var radarLon = dv.getInt32(mhb + 24) / 1000;
     var elevation = dv.getInt16(mhb + 18 + (21 - 1) * 2) / 10;   // PDB hw21 = elevation *0.1
     var bz = this._find3(body, mhb + 120, 0x42, 0x5a, 0x68);     // "BZh"
     if (bz < 0) return null;
@@ -91,7 +93,8 @@ window.Level3 = {
       radials.push({ az: az, levels: sym.subarray(rp + 6, rp + 6 + nbytes) });
       rp += 6 + nbytes;
     }
-    return { elevation: elevation, gateKm: 0.25, nbins: nbins, radials: radials };
+    return { elevation: elevation, gateKm: 0.25, nbins: nbins, radials: radials,
+             radarLat: radarLat, radarLon: radarLon };
   },
 
   _find3: function (b, from, a, c, d) {

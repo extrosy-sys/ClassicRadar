@@ -258,6 +258,7 @@ table.storm tbody tr:hover { background: #dbe7ff; cursor: pointer; }
 #v3-status { color: #9fb8da; font-family: "Courier New", monospace; }
 #v3-bar .v3-sp { flex: 1; }
 #v3-bar label { display: flex; align-items: center; gap: 4px; font-family: "Courier New", monospace; }
+#v3-bar select { font-family: Arial, sans-serif; font-size: 12px; border: 1px solid #7a7a7a; background: #fff; padding: 1px 2px; }
 #v3-count { color: #ffd23f; font-family: "Courier New", monospace; min-width: 78px; text-align: right; }
 #v3-close { background: #123a6b; color: #fff; border: 1px solid #7f9ac0; border-radius: 3px; padding: 3px 9px; cursor: pointer; }
 #v3-canvas { flex: 1; position: relative; min-height: 0; }

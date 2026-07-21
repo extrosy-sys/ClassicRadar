@@ -65,14 +65,45 @@ var dwellLeft = 0;
 
 function radarOpacity() { return parseInt(document.getElementById("opacity").value, 10) / 100; }
 
+/* Re-request tiles that fail to load (transient RainViewer / rate-limit misses that
+   otherwise leave a rectangular hole in the mosaic). Up to 2 retries with a cache-bust. */
+function attachRetry(layer) {
+  layer.on("tileerror", function (e) {
+    var t = e.tile;
+    if (!t) return;
+    t._retry = (t._retry || 0) + 1;
+    if (t._retry <= 2) {
+      var base = t.src.split("#")[0];
+      setTimeout(function () { t.src = base + "#r" + t._retry; }, 400 * t._retry);
+    }
+  });
+  return layer;
+}
+
+/* ---- satellite (NASA GIBS / GOES-East), reliable full-disk coverage ---- */
+var satLayer = null;
+var GIBS = {
+  ir:  { url:"https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GOES-East_ABI_Band13_Clean_Infrared/default/default/GoogleMapsCompatible_Level6/{z}/{y}/{x}.png",
+         maxNative:6, opacity:0.85 },
+  vis: { url:"https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GOES-East_ABI_GeoColor/default/default/GoogleMapsCompatible_Level7/{z}/{y}/{x}.jpg",
+         maxNative:7, opacity:0.95 }
+};
+function clearSat() { if (satLayer) { map.removeLayer(satLayer); satLayer = null; } }
+function showSat(kind) {
+  clearSat();
+  var g = GIBS[kind]; if (!g) return;
+  satLayer = attachRetry(L.tileLayer(g.url, { pane:"radar", opacity:g.opacity, maxZoom:18,
+    maxNativeZoom:g.maxNative, noWrap:true, attribution:"Satellite &copy; NASA GIBS / NOAA GOES-East" })).addTo(map);
+}
+
 function clearFrames() {
   frameLayers.forEach(function (l) { map.removeLayer(l); });
   frameLayers = []; frameTimes = [];
 }
 function showIem(on) {
   if (on && !iemLayer) {
-    iemLayer = L.tileLayer(IEM_URL, { pane:"radar", opacity:radarOpacity(), maxZoom:18, maxNativeZoom:14,
-      noWrap:true, zIndex:20, attribution:"Base reflectivity &copy; Iowa Environmental Mesonet" }).addTo(map);
+    iemLayer = attachRetry(L.tileLayer(IEM_URL, { pane:"radar", opacity:radarOpacity(), maxZoom:18, maxNativeZoom:14,
+      noWrap:true, zIndex:20, attribution:"Base reflectivity &copy; Iowa Environmental Mesonet" })).addTo(map);
   } else if (!on && iemLayer) {
     map.removeLayer(iemLayer); iemLayer = null;
   }
@@ -99,8 +130,8 @@ function loadRainViewer() {
         var url = j.host + f.path + "/256/{z}/{x}/{y}/" + scheme + "/1_1.png";
         // RainViewer's radar mosaic is only rendered to z7; above that its server returns a
         // "Zoom Level Not Supported" tile. Clamp to z7 so Leaflet upscales those pixels instead.
-        var lyr = L.tileLayer(url, { pane:"radar", opacity:0, maxZoom:18, maxNativeZoom:7, noWrap:true,
-          attribution:"Radar &copy; RainViewer" }).addTo(map);
+        var lyr = attachRetry(L.tileLayer(url, { pane:"radar", opacity:0, maxZoom:18, maxNativeZoom:7, noWrap:true,
+          attribution:"Radar &copy; RainViewer" })).addTo(map);
         frameLayers.push(lyr);
         frameTimes.push(f.time);
       });
@@ -158,16 +189,32 @@ function applyProduct() {
   pause();
 
   if (src === "rv") {
+    clearSat();
     setPlaybar(true);
     note.textContent = opt.text.replace(/&deg;/g,"°") +
       " — animated loop of the last ~2 h (RainViewer, ~2 km mosaic; pixelates when zoomed past ~z7). " +
       "For crisp detail when zoomed in, tick “IEM true-dBZ” below.";
     loadRainViewer();
-  } else { // unavail (velocity / VIL / echo tops - single-site products)
+  } else if (src === "sat") {
     clearFrames();
     setPlaybar(false);
+    showSat(opt.getAttribute("data-sat"));
     note.textContent = opt.text.replace(/&deg;/g,"°") +
-      " — single-site Level III product, not in the free national loop feeds. Reflectivity products animate; storm attributes below come from Level III.";
+      " — GOES-East, latest scan (NASA GIBS). Full-disk coverage, updates ~every 10 min.";
+    document.getElementById("stamp").textContent = "GOES latest";
+  } else if (src === "d3") {
+    // volumetric launcher: reset the map product to reflectivity, open the 3D view
+    clearSat();
+    var c = map.getCenter();
+    var site = nearestSite(c.lat, c.lng);
+    note.textContent = "Opening the 3D volumetric view (" + (opt.getAttribute("data-prod") === "vel" ? "velocity" : "reflectivity") + " tilts)…";
+    sel.value = "N0B";               // leave the 2D map on base reflectivity
+    loadRainViewer(); setPlaybar(true); clearSat();
+    if (site) Volume3D.open(Level3.site3(site.id), site.id + " — " + site.name, opt.getAttribute("data-prod"));
+  } else {
+    clearSat(); clearFrames();
+    setPlaybar(false);
+    note.textContent = opt.text.replace(/&deg;/g,"°") + " — not available as a national 2D layer.";
     document.getElementById("stamp").textContent = "product n/a";
   }
 }
@@ -593,6 +640,7 @@ document.getElementById("scrub").addEventListener("input", function () { pause()
 
 document.getElementById("opacity").addEventListener("input", function () {
   if (iemLayer) iemLayer.setOpacity(radarOpacity());
+  if (satLayer) satLayer.setOpacity(radarOpacity());
   if (frameLayers.length) showFrame(curFrame);
 });
 

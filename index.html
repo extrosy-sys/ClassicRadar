@@ -54,13 +54,13 @@
               <option value="N0B" data-src="rv" data-scheme="2">Base Reflectivity 0.5&deg;</option>
               <option value="NCR" data-src="rv" data-scheme="6">Composite Reflectivity</option>
             </optgroup>
-            <optgroup label="Velocity">
-              <option value="N0U" data-src="unavail">Base Velocity 0.5&deg;</option>
-              <option value="SRV" data-src="unavail">Storm-Relative Velocity</option>
+            <optgroup label="Satellite (GOES-East)">
+              <option value="IR" data-src="sat" data-sat="ir">Infrared (cloud tops)</option>
+              <option value="VIS" data-src="sat" data-sat="vis">GeoColor (visible)</option>
             </optgroup>
-            <optgroup label="Derived">
-              <option value="VIL" data-src="unavail">Vertically Integ. Liquid</option>
-              <option value="EET" data-src="unavail">Echo Tops</option>
+            <optgroup label="Volumetric (open 3D)">
+              <option value="V-REF" data-src="d3" data-prod="refl">Reflectivity tilts &rarr; 3D</option>
+              <option value="V-VEL" data-src="d3" data-prod="vel">Velocity tilts &rarr; 3D</option>
             </optgroup>
           </select>
         </div>

@@ -42,12 +42,27 @@ request fails).
 - `sites.js` — fallback station list.
 
 ## 3D volumetric storm view (`volume3d.js`)
-"3D volumetric view" button → fetches the 4 super-res reflectivity tilts (N0B/N1B/N2B/N3B) for the
-nearest NEXRAD, decodes each (bzip2 → packet-16 raw radials, dBZ = 0.5·level−33, elevation from
-PDB hw21), and plots every gate ≥ threshold as a colored point at its true (az, slant-range,
-elevation) position via 4/3-earth beam-height geometry (`h=√(r²+Rₑ²+2rRₑsinε)−Rₑ`, ground range
-`Rₑ·asin(r·cosε/(Rₑ+h))`), Y-up with a vertical-exaggeration slider. Verified: KRLX → 4 tilts
-(0.5/1.3/2.4/3.1°), ~73 k points, orbit/zoom/pan. Range capped at 160 km, gate stride 2 for perf.
+"3D volumetric view" button (or the Volumetric products in the dropdown) → fetches 4 super-res tilts
+for the nearest NEXRAD, decodes each (bzip2 → packet-16 raw radials, elevation from PDB hw21), and
+plots every gate past threshold as a colored point at its true (az, slant-range, elevation) position
+via 4/3-earth beam-height geometry (`h=√(r²+Rₑ²+2rRₑsinε)−Rₑ`, ground range `Rₑ·asin(r·cosε/(Rₑ+h))`),
+Y-up with a vertical-exaggeration slider. Range capped 160 km, gate stride 2.
+- **Two products** (in-view `#v3-prod` selector): Reflectivity N0B/N1B/N2B/N3B (dBZ, NWS ramp) and
+  Velocity N0G/N1G/N2G/N3G (m/s, green inbound / red outbound; value=(level−129)·0.5). N0U velocity
+  is retired — the super-res velocity is **N0G**.
+- **Map floor**: `buildFloor()` stitches CARTO z8 tiles covering the ±160 km box onto a canvas →
+  `THREE.CanvasTexture` on a plane (rotation.x=+π/2, DoubleSide) positioned so the radar (origin)
+  aligns; needs radarLat/Lon which `fetchTilt` now returns. Verified: KRLX velocity shows the
+  classic inbound/outbound Doppler couplet on the map floor.
+
+## Satellite & 2D reliability
+- **Satellite** (NASA GIBS / GOES-East, keyless, full-disk): products "Infrared (cloud tops)" =
+  `GOES-East_ABI_Band13_Clean_Infrared` (Level6) and "GeoColor (visible)" = `GOES-East_ABI_GeoColor`
+  (Level7). GIBS WMTS REST is `{z}/{y}/{x}` (row/col) — matches Leaflet's `{z}/{y}/{x}`. `time=default`
+  gives the latest scan. Static (playbar disabled).
+- **Tile retry** (`attachRetry`): radar/IEM/satellite layers re-request a tile on `tileerror` (up to
+  2×, cache-busted) — fixes the rectangular holes RainViewer sometimes left. RainViewer radar is
+  clamped to `maxNativeZoom:7` (its mosaic max); IEM to 14.
 
 ## Level III on the web (added 2026-07-21 — parity with the Android app)
 The Unidata bucket `unidata-nexrad-level3.s3.amazonaws.com` sends `Access-Control-Allow-Origin: *`,
