@@ -54,6 +54,11 @@ Y-up with a vertical-exaggeration slider. Range capped 160 km, gate stride 2.
   `THREE.CanvasTexture` on a plane (rotation.x=+π/2, DoubleSide) positioned so the radar (origin)
   aligns; needs radarLat/Lon which `fetchTilt` now returns. Verified: KRLX velocity shows the
   classic inbound/outbound Doppler couplet on the map floor.
+- **Opacity + Blob mode** (`makeMaterial`): Opac slider (default 55%) makes the cloud translucent
+  with `depthWrite:false` so you see through the top tilt to the layers below. Mode = Points (square
+  gates) or **Blobs** — a soft radial sprite (`getSprite`) turns each gate into a fuzzy transparent
+  puff, so the overlap builds volumetric "clouds". Opac/Size/Mode update the material live (no
+  geometry rebuild); threshold/V× rebuild the geometry.
 
 ## Satellite & 2D reliability
 - **Satellite** (NASA GIBS / GOES-East, keyless, full-disk): products "Infrared (cloud tops)" =

@@ -42,8 +42,38 @@ window.Volume3D = (function () {
     }
   };
 
-  var el, renderer, scene, camera, controls, cloud, floor, raf;
+  var el, renderer, scene, camera, controls, cloud, floor, raf, sprite = null;
   var tilts = [], product = "refl", site3 = "", label = "";
+
+  /* soft radial sprite -> each point becomes a fuzzy transparent "blob" (volumetric cloud) */
+  function getSprite() {
+    if (sprite) return sprite;
+    var c = document.createElement("canvas"); c.width = c.height = 64;
+    var x = c.getContext("2d"), g = x.createRadialGradient(32,32,0, 32,32,32);
+    g.addColorStop(0, "rgba(255,255,255,1)");
+    g.addColorStop(0.35, "rgba(255,255,255,0.5)");
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    x.fillStyle = g; x.fillRect(0,0,64,64);
+    sprite = new THREE.CanvasTexture(c); return sprite;
+  }
+
+  function makeMaterial() {
+    var mode = document.getElementById("v3-mode").value;
+    var op = parseInt(document.getElementById("v3-op").value, 10) / 100;
+    var size = parseFloat(document.getElementById("v3-size").value);
+    if (mode === "blob") {
+      return new THREE.PointsMaterial({ size: size * 3.2, map: getSprite(), vertexColors: true,
+        transparent: true, opacity: op, depthWrite: false, sizeAttenuation: true });
+    }
+    return new THREE.PointsMaterial({ size: size, vertexColors: true,
+      transparent: op < 0.999, opacity: op, depthWrite: op >= 0.999, sizeAttenuation: true });
+  }
+  function updateMaterial() {
+    if (!cloud) return;
+    var old = cloud.material;
+    cloud.material = makeMaterial();
+    old.dispose();
+  }
 
   function open(s3, lbl, prod) {
     build();
@@ -100,7 +130,8 @@ window.Volume3D = (function () {
     var geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
     geo.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
-    cloud = new THREE.Points(geo, new THREE.PointsMaterial({ size:1.4, vertexColors:true, sizeAttenuation:true }));
+    cloud = new THREE.Points(geo, makeMaterial());
+    cloud.renderOrder = 2;
     scene.add(cloud);
     document.getElementById("v3-count").textContent = (pos.length/3 | 0).toLocaleString() + " pts";
   }
@@ -153,8 +184,12 @@ window.Volume3D = (function () {
         '<b id="v3-title">VOLUMETRIC STORM — 3D reflectivity</b>' +
         '<label>Product <select id="v3-prod"><option value="refl">Reflectivity (dBZ)</option>' +
           '<option value="vel">Velocity (m/s)</option></select></label>' +
+        '<label>Mode <select id="v3-mode"><option value="point">Points</option>' +
+          '<option value="blob">Blobs</option></select></label>' +
         '<span id="v3-status"></span><span class="v3-sp"></span>' +
         '<label><span id="v3-thlab">dBZ≥</span> <input type="range" id="v3-thresh" min="5" max="65" value="20"></label>' +
+        '<label>Opac <input type="range" id="v3-op" min="8" max="100" value="55"></label>' +
+        '<label>Size <input type="range" id="v3-size" min="1" max="10" value="2" step="0.5"></label>' +
         '<label>V× <input type="range" id="v3-vex" min="1" max="12" value="5" step="0.5"></label>' +
         '<span id="v3-count"></span>' +
         '<button id="v3-close">× CLOSE</button>' +
@@ -176,6 +211,9 @@ window.Volume3D = (function () {
     document.getElementById("v3-close").onclick = close;
     document.getElementById("v3-thresh").oninput = rebuild;
     document.getElementById("v3-vex").oninput = rebuild;
+    document.getElementById("v3-op").oninput = updateMaterial;      // live, no geometry rebuild
+    document.getElementById("v3-size").oninput = updateMaterial;
+    document.getElementById("v3-mode").onchange = updateMaterial;
     document.getElementById("v3-prod").onchange = function () { product = this.value; configSlider(); load(); };
     window.addEventListener("resize", resize);
     resize();
