@@ -57,7 +57,8 @@ layers.city.addTo(map);
 /* ============================= RADAR ============================= */
 var IEM_URL = "https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png";
 var iemLayer = null;          // live still (IEM base reflectivity)
-var frameLayers = [];         // RainViewer animated frames
+var frameLayer = null;        // ONE RainViewer layer; its URL swaps per frame (see loadRainViewer)
+var frameUrls = [];           // per-frame tile-URL templates
 var frameTimes = [];          // unix seconds per frame
 var curFrame = 0;
 var playing = false;
@@ -116,8 +117,8 @@ function showSat(kind) {
 }
 
 function clearFrames() {
-  frameLayers.forEach(function (l) { map.removeLayer(l); });
-  frameLayers = []; frameTimes = [];
+  if (frameLayer) { map.removeLayer(frameLayer); frameLayer = null; }
+  frameUrls = []; frameTimes = [];
 }
 
 /* RainViewer is only a ~2 km mosaic (native z7), so it turns to coarse blocks when zoomed
@@ -160,15 +161,17 @@ function loadRainViewer() {
       var past = (j.radar && j.radar.past) || [];
       var use = past.slice(Math.max(0, past.length - n));
       use.forEach(function (f) {
-        var url = j.host + f.path + "/256/{z}/{x}/{y}/" + scheme + "/1_1.png";
-        // RainViewer's radar mosaic is only rendered to z7; above that its server returns a
-        // "Zoom Level Not Supported" tile. Clamp to z7 so Leaflet upscales those pixels instead.
-        var lyr = attachRetry(L.tileLayer(url, { pane:"radar", opacity:0, maxZoom:18, maxNativeZoom:7, noWrap:true,
-          attribution:"Radar &copy; RainViewer" }), "RainViewer loop").addTo(map);
-        frameLayers.push(lyr);
+        frameUrls.push(j.host + f.path + "/256/{z}/{x}/{y}/" + scheme + "/1_1.png");
         frameTimes.push(f.time);
       });
-      curFrame = frameLayers.length - 1;
+      if (frameUrls.length) {
+        // ONE layer whose URL swaps per frame -> only the current frame's tiles load at once.
+        // (12 preloaded layers = ~600 simultaneous requests, which RainViewer rate-limits into
+        //  dropped tiles.) RainViewer's mosaic is native z7; clamp so Leaflet upscales beyond.
+        frameLayer = attachRetry(L.tileLayer(frameUrls[frameUrls.length - 1], { pane:"radar", opacity:0,
+          maxZoom:18, maxNativeZoom:7, noWrap:true, attribution:"Radar &copy; RainViewer" }), "RainViewer loop").addTo(map);
+      }
+      curFrame = frameUrls.length - 1;
       wireScrub();
       goLive();                    // default to the reliable IEM current scan; PLAY switches to the loop
       return true;
@@ -180,7 +183,7 @@ var usingFrames = false;   // true while showing the RainViewer loop; false = re
 /* return to the reliable IEM current scan (shown at every zoom) */
 function goLive() {
   usingFrames = false;
-  frameLayers.forEach(function (l) { l.setOpacity(0); });
+  if (frameLayer) frameLayer.setOpacity(0);
   if (currentProductSrc() === "rv") showIem(true);
   document.getElementById("stamp").textContent = "IEM current";
   document.getElementById("frameidx").textContent = "live";
@@ -188,33 +191,31 @@ function goLive() {
 }
 
 function showFrame(i) {
-  if (!frameLayers.length) return;
+  if (!frameUrls.length || !frameLayer) return;
   usingFrames = true;
   showIem(false);                 // hide IEM while the animation frame is up
-  curFrame = (i + frameLayers.length) % frameLayers.length;
-  var op = radarOpacity();
-  for (var k = 0; k < frameLayers.length; k++) {
-    frameLayers[k].setOpacity(k === curFrame ? op : 0);
-  }
+  curFrame = (i + frameUrls.length) % frameUrls.length;
+  frameLayer.setUrl(frameUrls[curFrame]);   // swap this one layer's URL -> loads just this frame
+  frameLayer.setOpacity(radarOpacity());
   var t = new Date(frameTimes[curFrame] * 1000);
   document.getElementById("stamp").textContent = fmtStamp(t);
   document.getElementById("scrub").value = curFrame;
-  document.getElementById("frameidx").textContent = (curFrame + 1) + "/" + frameLayers.length;
+  document.getElementById("frameidx").textContent = (curFrame + 1) + "/" + frameUrls.length;
 }
 function wireScrub() {
   var s = document.getElementById("scrub");
-  s.max = Math.max(0, frameLayers.length - 1);
+  s.max = Math.max(0, frameUrls.length - 1);
   s.value = curFrame;
 }
 
 function tick() {
-  if (curFrame === frameLayers.length - 1 && dwellLeft > 0) { dwellLeft--; return; }
+  if (curFrame === frameUrls.length - 1 && dwellLeft > 0) { dwellLeft--; return; }
   var next = curFrame + 1;
-  if (next >= frameLayers.length) { next = 0; dwellLeft = parseInt(document.getElementById("dwell").value, 10) - 1; }
+  if (next >= frameUrls.length) { next = 0; dwellLeft = parseInt(document.getElementById("dwell").value, 10) - 1; }
   showFrame(next);
 }
 function play() {
-  if (!frameLayers.length) return;
+  if (!frameUrls.length) return;
   playing = true;
   showFrame(curFrame);           // switch from IEM-live to the animation frames
   document.getElementById("pp").innerHTML = "&#10073;&#10073; PAUSE";
@@ -769,7 +770,7 @@ document.getElementById("scrub").addEventListener("input", function () { pause()
 document.getElementById("opacity").addEventListener("input", function () {
   if (iemLayer) iemLayer.setOpacity(radarOpacity());
   if (satLayer) satLayer.setOpacity(radarOpacity());
-  if (usingFrames && frameLayers.length) showFrame(curFrame);
+  if (usingFrames && frameLayer) frameLayer.setOpacity(radarOpacity());
 });
 
 function toggleLayer(cb, layer) {

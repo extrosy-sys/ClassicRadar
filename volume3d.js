@@ -338,12 +338,19 @@ window.Volume3D = (function () {
         im.src = "https://a.basemaps.cartocdn.com/rastertiles/voyager/"+Z+"/"+tx+"/"+ty+".png";
       })(tx, ty);
     }
-    var planeW = cv.width * kmPerPx, planeH = cv.height * kmPerPx;
-    floor = new THREE.Mesh(new THREE.PlaneGeometry(planeW, planeH),
-      new THREE.MeshBasicMaterial({ map:tex, transparent:false, opacity:1, depthWrite:true, side:THREE.DoubleSide }));
-    floor.rotation.x = Math.PI/2;   // lay flat: image north -> +Z, east -> +X
+    // explicit ground quad in world coords (X=east, Z=north, Y=0) with UVs pinned to the map,
+    // so orientation is unambiguous: north=+Z, east=+X, text upright (no mirror).
     var offX = cx - minTx*256, offY = cy - minTy*256;
-    floor.position.set((cv.width/2 - offX) * kmPerPx, -0.15, (offY - cv.height/2) * kmPerPx);
+    var Xmin = -offX * kmPerPx, Xmax = (cv.width - offX) * kmPerPx;   // west / east edges
+    var Zmax = offY * kmPerPx, Zmin = -(cv.height - offY) * kmPerPx;  // north / south edges
+    var Y = -0.15;
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute([
+      Xmin, Y, Zmax,  Xmax, Y, Zmax,  Xmin, Y, Zmin,  Xmax, Y, Zmin ], 3)); // NW,NE,SW,SE
+    geo.setAttribute("uv", new THREE.Float32BufferAttribute([ 1,1,  0,1,  1,0,  0,0 ], 2));
+    geo.setIndex([0, 2, 3, 0, 3, 1]);
+    geo.computeVertexNormals();
+    floor = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide }));
     scene.add(floor);
   }
 
@@ -380,7 +387,7 @@ window.Volume3D = (function () {
     var host = el.querySelector("#v3-canvas");
     scene = new THREE.Scene(); scene.background = new THREE.Color(0x0a0e14);
     camera = new THREE.PerspectiveCamera(55, 1, 1, 6000);
-    camera.position.set(180, 150, 180);
+    camera.position.set(40, 165, -235);   // view from the SOUTH looking north, so map labels read upright
     renderer = new THREE.WebGLRenderer({ antialias:true, preserveDrawingBuffer:true });
     host.appendChild(renderer.domElement);
     controls = new THREE.OrbitControls(camera, renderer.domElement); controls.enableDamping = true;

@@ -50,10 +50,11 @@ Y-up with a vertical-exaggeration slider. Range capped 160 km, gate stride 2.
 - **Two products** (in-view `#v3-prod` selector): Reflectivity N0B/N1B/N2B/N3B (dBZ, NWS ramp) and
   Velocity N0G/N1G/N2G/N3G (m/s, green inbound / red outbound; value=(level−129)·0.5). N0U velocity
   is retired — the super-res velocity is **N0G**.
-- **Map floor**: `buildFloor()` stitches CARTO z8 tiles covering the ±160 km box onto a canvas →
-  `THREE.CanvasTexture` on a plane (rotation.x=+π/2, DoubleSide) positioned so the radar (origin)
-  aligns; needs radarLat/Lon which `fetchTilt` now returns. Verified: KRLX velocity shows the
-  classic inbound/outbound Doppler couplet on the map floor.
+- **Map floor**: `buildFloor()` stitches CARTO **Voyager** (labeled) z8 tiles over the ±160 km box
+  onto a canvas → texture on an **explicit ground quad** (world verts X=east/Z=north, UVs pinned so
+  north=+Z, east=+X, labels upright — the U had to be flipped [1,1/0,1/1,0/0,0]) + `MeshBasicMaterial`
+  (unlit, always bright). Default **camera views from the SOUTH looking north** (`(40,165,-235)`) so
+  the baked-in north-up map text reads correctly (viewing from the north side shows it reversed).
 - **Opacity + Blob mode** (`makeMaterial`): Opac slider (default 55%) makes the cloud translucent
   with `depthWrite:false` so you see through the top tilt to the layers below. Mode = Points (square
   gates) or **Blobs** — a soft radial sprite (`getSprite`) turns each gate into a fuzzy transparent
@@ -84,6 +85,10 @@ higher resolution (fetch nearby radars' tilts, take max dBZ per voxel) — that'
   `GOES-East_ABI_Band13_Clean_Infrared` (Level6) and "GeoColor (visible)" = `GOES-East_ABI_GeoColor`
   (Level7). GIBS WMTS REST is `{z}/{y}/{x}` (row/col) — matches Leaflet's `{z}/{y}/{x}`. `time=default`
   gives the latest scan. Static (playbar disabled).
+- **RainViewer loop = ONE tile layer, URL swapped per frame** (`frameLayer`/`frameUrls`, `setUrl` in
+  `showFrame`): the old design preloaded 12 layers = ~600 simultaneous requests that RainViewer
+  rate-limited into dropped tiles. Now only the current frame's ~48 tiles load at once (browser-cached
+  after the first loop pass) — fixes "missing tiles when I press play".
 - **IEM is the reliable default at EVERY zoom** (`goLive`/`syncIem`): RainViewer's free tile server is
   flaky (intermittent misses, ~2 km mosaic that blocks up when zoomed), so the map shows the crisp
   IEM current scan by default. **PLAY** switches to the RainViewer loop (`showFrame` sets `usingFrames`,
