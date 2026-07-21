@@ -91,6 +91,26 @@ live (`setSurfaceOpacity`); threshold/Fill/V× rebuild. Grid 104×104×28 over �
     different algorithm entirely). Only reflectivity (a perspective-independent scalar) is combined;
     velocity stays single-radar. Verified: KTLX velocity = 1 radar, KTLX reflectivity = 4 combined.
 
+## 2D Doppler velocity (click a radar)
+Each WSR-88D site popup ("Radar site icons") has a **Velocity** button alongside "Open this radar"
+/ "3D volume". It reuses the *same* super-res Level III velocity decode as the 3D view
+(`Level3.fetchTilt(site3,"N0G")`) but renders the base 0.5° tilt as a flat, georeferenced map layer:
+- `renderVelocity` draws each radial onto a 1200² offscreen canvas — one annular arc-stroke per gate
+  (canvas angle = `az−90°`, exactly; lineWidth = one gate's radial depth), colored on the same ramp as
+  3D (green = toward / inbound `v<0`, red = away / outbound `v>0`, m/s=(level−129)·0.5, skip
+  levels 0/1/255). Canvas → `toDataURL` → `L.imageOverlay` on a dedicated **`velocity` pane** (z260,
+  above reflectivity, below the city labels), bounds = radar lat/lon ± (maxRange km → deg, range capped
+  `VEL_MAX_KM`=230). Flat-earth km→deg placement is self-consistent with the overlay bounds so gates land
+  correctly (mercator stretch over 230 km is negligible).
+- Velocity is **single-radar** (radial measurement — never combined; see the 3D note). While it's up it
+  *owns the radar layer*: `showVelocity`→`renderVelocity` hides IEM + the RainViewer buffers, `syncIem`
+  early-returns on `velActive` (so a zoom doesn't bring reflectivity back under it). A top-center **chip**
+  (`#velchip`) shows the site + tilt + a green↔red toward/away key and an **×** to dismiss. `clearVelocity`
+  (also fired by ◉ LIVE and any product change) removes the overlay and restores reflectivity via
+  `syncIem`. The radar-opacity slider drives the overlay too. Verified live: KABR base velocity, 1200²
+  data-URL overlay, 17.7% coverage with both inbound (green) and outbound (red) returns, reflectivity
+  hidden underneath, × restores it — no console errors. Android app is 2D reflectivity only (no velocity).
+
 ## Satellite & 2D reliability
 - **Satellite** (NASA GIBS / GOES-East, keyless, full-disk): products "Infrared (cloud tops)" =
   `GOES-East_ABI_Band13_Clean_Infrared` (Level6) and "GeoColor (visible)" = `GOES-East_ABI_GeoColor`

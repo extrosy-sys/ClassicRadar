@@ -34,6 +34,7 @@ L.control.zoom({ position: "bottomleft" }).addTo(map);
 
 function pane(name, z) { map.createPane(name); map.getPane(name).style.zIndex = z; }
 pane("radar", 250);
+pane("velocity", 260);
 pane("clutter", 350);
 pane("warn", 400);
 pane("sites", 500);
@@ -132,6 +133,7 @@ function currentProductSrc() {
   return p.options[p.selectedIndex].getAttribute("data-src");
 }
 function syncIem() {
+  if (velActive) { showIem(false); return; }             // velocity overlay owns the radar layer
   var manual = document.getElementById("c-iem").checked;
   if (currentProductSrc() !== "rv") { showIem(manual); return; }
   showIem(manual || !usingFrames);      // reliable IEM base whenever not actively looping
@@ -143,6 +145,79 @@ function showIem(on) {
   } else if (!on && iemLayer) {
     map.removeLayer(iemLayer); iemLayer = null;
   }
+}
+
+/* ===== single-radar Doppler velocity overlay (click a radar site) =====
+   Reuses the SAME super-res Level III velocity decode as the 3D view
+   (Level3.fetchTilt N0G): fetch the base 0.5° velocity radials, render them to a
+   georeferenced canvas, and drop it on the map as an image overlay. Velocity is
+   RADIAL, so it's a single-radar product — green = toward the radar, red = away. */
+var velOverlay = null, velActive = false, velInfo = null;
+var VEL_MAX_KM = 230;
+
+function velColor(v) {                                   // matches the 3D velocity ramp
+  var a = Math.min(1, Math.abs(v) / 35);
+  return v < 0
+    ? "rgb(26," + Math.round((0.35 + 0.65 * a) * 255) + ",77)"    // inbound  -> green
+    : "rgb(" + Math.round((0.35 + 0.65 * a) * 255) + ",31,31)";   // outbound -> red
+}
+
+function clearVelocity(restore) {
+  if (velOverlay) { map.removeLayer(velOverlay); velOverlay = null; }
+  velActive = false; velInfo = null;
+  var chip = document.getElementById("velchip"); if (chip) chip.style.display = "none";
+  if (restore !== false) syncIem();                      // bring the reflectivity layer back
+}
+
+function showVelocity(s) {
+  var site3 = Level3.site3(s.id);
+  setTileStatus("Fetching Doppler velocity for " + s.id + "…", "");
+  Level3.fetchTilt(site3, "N0G").then(function (t) {
+    if (!t || !t.radials || !t.radials.length) { setTileStatus(s.id + ": no velocity data available", "err"); return; }
+    renderVelocity(s, t);
+  }).catch(function (e) { setTileStatus(s.id + " velocity failed: " + e.message, "err"); });
+}
+
+function renderVelocity(s, t) {
+  var lat = t.radarLat, lon = t.radarLon, gk = t.gateKm;
+  var maxKm = Math.min(t.nbins * gk, VEL_MAX_KM);
+  var W = 1200, H = 1200, cx = W / 2, cy = H / 2, pxPerKm = (W / 2) / maxKm;
+  var cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+  var ctx = cv.getContext("2d");
+  ctx.lineWidth = gk * pxPerKm + 0.8;                    // constant: one gate's radial depth
+  var maxG = Math.floor(maxKm / gk), D = Math.PI / 180, hw = 0.32 * D;   // half a 0.5° radial (slight overlap)
+  t.radials.forEach(function (r) {
+    // canvas angle = az - 90° (az is clockwise-from-north; north-up canvas maps it exactly)
+    var a = (r.az - 90) * D, a0 = a - hw, a1 = a + hw, lv = r.levels, n = Math.min(lv.length, maxG);
+    for (var g = 0; g < n; g++) {
+      var L = lv[g];
+      if (L < 2 || L === 255) continue;                  // 0 below-threshold, 1 range-folded, 255 no-data
+      ctx.strokeStyle = velColor((L - 129) * 0.5);       // m/s = (level-129)*0.5
+      var rp = (g + 0.5) * gk * pxPerKm;
+      ctx.beginPath(); ctx.arc(cx, cy, rp, a0, a1); ctx.stroke();
+    }
+  });
+  var dLat = maxKm / 111.32, dLon = maxKm / (111.32 * Math.cos(lat * Math.PI / 180));
+  var bounds = [[lat - dLat, lon - dLon], [lat + dLat, lon + dLon]];
+  clearVelocity(false);                                  // remove any previous overlay, keep reflectivity hidden
+  velActive = true;
+  showIem(false);
+  if (usingFrames) buffers.forEach(function (l) { l.setOpacity(0); });   // hide the reflectivity loop under it
+  velOverlay = L.imageOverlay(cv.toDataURL("image/png"), bounds,
+    { pane: "velocity", opacity: radarOpacity(), interactive: false }).addTo(map);
+  velInfo = { site: s, elevation: t.elevation };
+  map.setView([lat, lon], Math.min(Math.max(map.getZoom(), 7), 9));      // regional view centered on the radar
+  showVelChip(s, t.elevation);
+  setTileStatus("", "");
+}
+
+function showVelChip(s, elev) {
+  var chip = document.getElementById("velchip"); if (!chip) return;
+  chip.innerHTML = '<b>' + s.id + '</b> Base Velocity ' + (elev ? elev.toFixed(1) : "0.5") + '&deg;' +
+    ' <span class="vscale"><i class="vin"></i>toward&nbsp;&nbsp;<i class="vout"></i>away</span>' +
+    ' <button id="velclose" title="Clear velocity">&times;</button>';
+  chip.style.display = "block";
+  document.getElementById("velclose").onclick = function () { clearVelocity(true); };
 }
 
 /* --- RainViewer: fetch frame catalog, build animated (historical) tile layers.
@@ -189,6 +264,7 @@ var usingFrames = false;   // true while showing the RainViewer loop; false = re
 
 /* return to the reliable IEM current scan (shown at every zoom) */
 function goLive() {
+  if (velActive) clearVelocity(false);                   // LIVE returns to reflectivity
   usingFrames = false;
   buffers.forEach(function (l) { l.setOpacity(0); });
   if (currentProductSrc() === "rv") showIem(true);
@@ -254,6 +330,7 @@ function applyProduct() {
   var src = opt.getAttribute("data-src");
   var note = document.getElementById("prodnote");
   pause();
+  if (velActive) clearVelocity(false);                   // changing product drops the velocity overlay
 
   if (src === "rv") {
     clearSat();
@@ -377,11 +454,13 @@ function openSitePopup(s) {
   var html = '<div class="sitepop"><b>' + s.id + '</b> &middot; ' + s.net + '<br>' + s.name + '<br>' +
     s.lat.toFixed(3) + '&deg;, ' + s.lon.toFixed(3) + '&deg;<br>' +
     '<button class="sp-go">Open this radar</button>' +
-    (s.net === "WSR-88D" ? '<button class="sp-3d">3D volume</button>' : '') + '</div>';
+    (s.net === "WSR-88D" ? '<button class="sp-vel">Velocity</button><button class="sp-3d">3D volume</button>' : '') + '</div>';
   L.popup({ offset: [0, -4] }).setLatLng([s.lat, s.lon]).setContent(html).openOn(map);
   setTimeout(function () {
     var el = document.querySelector(".sitepop"); if (!el) return;
     el.querySelector(".sp-go").onclick = function () { map.closePopup(); selectSite(s); };
+    var bv = el.querySelector(".sp-vel");
+    if (bv) bv.onclick = function () { map.closePopup(); showVelocity(s); };
     var b3 = el.querySelector(".sp-3d");
     if (b3) b3.onclick = function () { map.closePopup(); Volume3D.open(Level3.site3(s.id), s.id + " — " + s.name, "refl"); };
   }, 0);
@@ -790,6 +869,7 @@ document.getElementById("opacity").addEventListener("input", function () {
   if (iemLayer) iemLayer.setOpacity(radarOpacity());
   if (satLayer) satLayer.setOpacity(radarOpacity());
   if (usingFrames && buffers.length) buffers[frontBuf].setOpacity(radarOpacity());
+  if (velOverlay) velOverlay.setOpacity(radarOpacity());
 });
 
 function toggleLayer(cb, layer) {

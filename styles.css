@@ -246,6 +246,25 @@ table.storm tbody tr:hover { background: #dbe7ff; cursor: pointer; }
 }
 #tilestatus.err { background: rgba(140,20,20,0.92); border-color: #e88; }
 
+/* Doppler velocity overlay chip (top-center) */
+#velchip {
+  position: absolute; z-index: 500; left: 50%; transform: translateX(-50%);
+  top: 8px; padding: 4px 8px; border-radius: 3px;
+  font-family: "Courier New", monospace; font-size: 11px; color: #fff;
+  background: rgba(20,20,20,0.86); border: 1px solid #666;
+  display: flex; align-items: center; gap: 8px;
+}
+#velchip b { color: #ffd23f; }
+#velchip .vscale { display: inline-flex; align-items: center; gap: 3px; opacity: 0.9; }
+#velchip .vscale i { width: 12px; height: 11px; display: inline-block; }
+#velchip .vin  { background: #1ad24d; }   /* toward -> green */
+#velchip .vout { background: #d21f1f; }   /* away   -> red   */
+#velchip #velclose {
+  background: #333; color: #fff; border: 1px solid #777; border-radius: 2px;
+  width: 18px; height: 18px; line-height: 1; cursor: pointer; padding: 0; font-size: 13px;
+}
+#velchip #velclose:hover { background: #a33; }
+
 /* radar site icons on the map */
 .siteicon .sdot {
   display: block; width: 7px; height: 7px; border-radius: 50%;
