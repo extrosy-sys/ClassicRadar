@@ -22,14 +22,32 @@ open `index.html` or serve the folder.
 Fallback radar-site list is embedded in `sites.js` (used only if the NWS station
 request fails).
 
+## Published
+- **Live (GitHub Pages):** https://extrosy-sys.github.io/ClassicRadar/  (public repo
+  `extrosy-sys/ClassicRadar`, served from `master` root). Android companion is the PRIVATE repo
+  `extrosy-sys/ClassicRadar-Android`. All data sources are HTTPS + CORS-open, so the static
+  Pages site works with no backend.
+
 ## Files
 - `index.html` — layout: sidebar (site/product/loop/clutter/actions), map stage with
   directional pan buttons + dBZ legend, playback bar, storm panel (table / Level III text tabs).
-- `styles.css` — clinical boxy look; Arial chrome, Courier data.
+- `styles.css` — clinical boxy look; Arial chrome, Courier data; 3D overlay styles.
 - `app.js` — all logic (single IIFE, Leaflet 1.9.4 from unpkg CDN).
-- `level3.js` — client-side NEXRAD Level III decoder (pako for zlib); parity with the Android
-  `Level3.kt`. Fetches NST from the Unidata AWS bucket (CORS `*`), decodes storm cells.
+- `level3.js` — client-side NEXRAD Level III decoder. NST (storm track, via pako/zlib) AND
+  super-res reflectivity tilts N0B/N1B/N2B/N3B (`fetchTilt` → bzip2 symbology + packet-16 radials).
+- `bzip2.js` — pure-JS bzip2 decoder (antimatter15), **patched**: the output buffer now grows
+  (the final-RLE output of a 900 KB BWT block can exceed it — the stock lib truncated at 900000).
+- `volume3d.js` — Three.js (r128) volumetric "MRI" storm view; OrbitControls; dBZ/vertical-
+  exaggeration sliders; `preserveDrawingBuffer` on so it can be screenshotted.
 - `sites.js` — fallback station list.
+
+## 3D volumetric storm view (`volume3d.js`)
+"3D volumetric view" button → fetches the 4 super-res reflectivity tilts (N0B/N1B/N2B/N3B) for the
+nearest NEXRAD, decodes each (bzip2 → packet-16 raw radials, dBZ = 0.5·level−33, elevation from
+PDB hw21), and plots every gate ≥ threshold as a colored point at its true (az, slant-range,
+elevation) position via 4/3-earth beam-height geometry (`h=√(r²+Rₑ²+2rRₑsinε)−Rₑ`, ground range
+`Rₑ·asin(r·cosε/(Rₑ+h))`), Y-up with a vertical-exaggeration slider. Verified: KRLX → 4 tilts
+(0.5/1.3/2.4/3.1°), ~73 k points, orbit/zoom/pan. Range capped at 160 km, gate stride 2 for perf.
 
 ## Level III on the web (added 2026-07-21 — parity with the Android app)
 The Unidata bucket `unidata-nexrad-level3.s3.amazonaws.com` sends `Access-Control-Allow-Origin: *`,
