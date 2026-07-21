@@ -616,8 +616,10 @@ function centerOnSite() {
 var siteLayer = L.layerGroup([], { pane:"sites" });
 function buildSiteMarkers() {
   siteLayer.clearLayers();
+  var net = document.getElementById("network").value;   // ALL / WSR-88D / TDWR filters the map too
   sites.forEach(function (s) {
     if (s.lat == null) return;
+    if (net !== "ALL" && s.net !== net) return;
     var m = L.marker([s.lat, s.lon], { pane:"sites", icon: L.divIcon({
       className: "siteicon " + (s.net === "TDWR" ? "tdwr" : "nexrad"),
       iconSize: [11, 11], iconAnchor: [5.5, 5.5], html: '<span class="sdot"></span>' }) });
@@ -1087,7 +1089,7 @@ document.getElementById("menubtn").addEventListener("click", function () {
 });
 window.addEventListener("resize", function () { map.invalidateSize(); });
 
-document.getElementById("network").addEventListener("change", populateSites);
+document.getElementById("network").addEventListener("change", function () { populateSites(); buildSiteMarkers(); });
 document.getElementById("findsite").addEventListener("input", populateSites);
 document.getElementById("site").addEventListener("change", function () {
   showSiteInfo(); centerOnSite();
