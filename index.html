@@ -58,6 +58,11 @@
               <option value="IR" data-src="sat" data-sat="ir">Infrared (cloud tops)</option>
               <option value="VIS" data-src="sat" data-sat="vis">GeoColor (visible)</option>
             </optgroup>
+            <optgroup label="Precipitation (MRMS QPE)">
+              <option value="P1H" data-src="precip" data-rule="rft_1hr">Precip rate &mdash; 1&nbsp;hr (in)</option>
+              <option value="P24H" data-src="precip" data-rule="rft_24hr">Total precip &mdash; 24&nbsp;hr (in)</option>
+              <option value="P72H" data-src="precip" data-rule="rft_72hr">Storm total &mdash; 72&nbsp;hr (in)</option>
+            </optgroup>
             <optgroup label="Volumetric (open 3D)">
               <option value="V-REF" data-src="d3" data-prod="refl">Reflectivity tilts &rarr; 3D</option>
               <option value="V-VEL" data-src="d3" data-prod="vel">Velocity tilts &rarr; 3D</option>
@@ -159,6 +164,15 @@
 
       <div id="tilestatus" style="display:none"></div>
       <div id="srvtool" style="display:none"></div>
+
+      <!-- storm-cell symbol legend -->
+      <div id="symlegend">
+        <div class="slhead">Storm cells</div>
+        <div class="slrow"><span class="slsym t-tor">&#9660;</span> Tornado / TVS</div>
+        <div class="slrow"><span class="slsym t-meso">&#9670;</span> Meso / flood</div>
+        <div class="slrow"><span class="slsym t-hail">&#9632;</span> Severe / hail</div>
+        <div class="slrow"><span class="slsym t-cell">&#9679;</span> Radar cell</div>
+      </div>
     </div>
 
     <div id="playbar">

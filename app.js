@@ -118,6 +118,32 @@ function showSat(kind) {
     maxNativeZoom:g.maxNative, noWrap:true, attribution:"Satellite &copy; NASA GIBS / NOAA GOES-East" }), "Satellite").addTo(map);
 }
 
+/* ---- MRMS precipitation (NOAA/NWS QPE, keyless, EPSG:3857 ImageServer) ----
+   The ImageServer serves no XYZ tiles, so we tile it ourselves: each 256² tile is one
+   exportImage call for that tile's Web-Mercator bbox, colored by a QPE accumulation
+   rasterFunction (rft_1hr = last hour ≈ rate, rft_24hr = daily total). All in inches. */
+var precipLayer = null;
+var MRMS_EXPORT = "https://mapservices.weather.noaa.gov/raster/rest/services/obs/mrms_qpe/ImageServer/exportImage";
+var WEBMERC_MAX = 20037508.342789244;
+var PrecipTileLayer = L.TileLayer.extend({
+  getTileUrl: function (coords) {
+    var res = (2 * WEBMERC_MAX) / (256 * Math.pow(2, coords.z));
+    var minx = -WEBMERC_MAX + coords.x * 256 * res, maxx = minx + 256 * res;
+    var maxy =  WEBMERC_MAX - coords.y * 256 * res, miny = maxy - 256 * res;
+    var rule = encodeURIComponent(JSON.stringify({ rasterFunction: this.options.rasterFunction }));
+    return MRMS_EXPORT + "?bbox=" + minx + "," + miny + "," + maxx + "," + maxy +
+      "&bboxSR=3857&imageSR=3857&size=256,256&format=png&transparent=true&f=image&renderingRule=" + rule +
+      (this._crBust ? "&_=" + this._crBust : "");
+  }
+});
+function clearPrecip() { if (precipLayer) { map.removeLayer(precipLayer); precipLayer = null; } }
+function showPrecip(rule) {
+  clearPrecip();
+  precipLayer = attachRetry(new PrecipTileLayer("", { pane:"radar", opacity:radarOpacity(),
+    rasterFunction:rule, maxZoom:18, maxNativeZoom:12, noWrap:true,
+    attribution:"Precip &copy; NOAA/NWS MRMS QPE" }), "MRMS precip").addTo(map);
+}
+
 function clearFrames() {
   buffers.forEach(function (l) { map.removeLayer(l); });
   buffers = []; frontBuf = 0;
@@ -393,6 +419,8 @@ function applyProduct() {
   var note = document.getElementById("prodnote");
   pause();
   if (srvActive) closeSingleRadar(false);                // changing product drops the single-radar overlay
+  clearPrecip();                                          // and any MRMS precip layer
+  document.getElementById("legend").style.display = (src === "rv") ? "" : "none";  // dBZ scale is refl-only
 
   if (src === "rv") {
     clearSat();
@@ -408,6 +436,13 @@ function applyProduct() {
     note.textContent = opt.text.replace(/&deg;/g,"°") +
       " — GOES-East, latest scan (NASA GIBS). Full-disk coverage, updates ~every 10 min.";
     document.getElementById("stamp").textContent = "GOES latest";
+  } else if (src === "precip") {
+    clearFrames(); clearSat();
+    setPlaybar(false);
+    showPrecip(opt.getAttribute("data-rule"));
+    note.textContent = opt.text.replace(/&deg;/g,"°") +
+      " — NOAA/NWS MRMS gauge-corrected QPE (inches). National mosaic, updates ~hourly.";
+    document.getElementById("stamp").textContent = "MRMS QPE";
   } else if (src === "d3") {
     // volumetric launcher: reset the map product to reflectivity, open the 3D view
     clearSat();
@@ -670,7 +705,13 @@ function renderStorm(features, l3List) {
   lastL3 = l3List[0] ? l3List[0].result : null;
 
   var bounds = map.getBounds().pad(0.15);
-  var showTracks = map.getZoom() >= TRACK_MIN_ZOOM && document.getElementById("c-tracks").checked;
+  var z = map.getZoom();
+  var showTracks = z >= TRACK_MIN_ZOOM && document.getElementById("c-tracks").checked;
+  // thin tracks progressively as you zoom out so they don't overlap into mush:
+  //   z>=9: every track + minute ticks (dots/labels) · z8: every track, thinner, NO ticks
+  //   z7: only significant (warning-linked / TVS) tracks, no ticks · below z7: none (data gated)
+  var trackTicks = z >= 9;
+  var trackAllCells = z >= 8;
   var rows = [];
 
   // 1) Level III cells from every in-view radar (only those within the padded view)
@@ -735,11 +776,15 @@ function renderStorm(features, l3List) {
   // 3) markers + forecast tracks + refs
   rows.forEach(function (r) {
     if (!r.glyph) { r.glyph = "●"; r.cls = "t-cell"; r.threat = "cell"; r.event = r.event || "Radar cell"; }
-    if (showTracks && r.track && r.track.length && r.center) {
+    // zoomed way out (z7), keep only significant (warning-linked / TVS) tracks; radar-only cells drop theirs
+    var drawTrack = showTracks && r.track && r.track.length && r.center &&
+      (trackAllCells || r.threat !== "cell" || r.tvs);
+    if (drawTrack) {
       var tp = [r.center].concat(r.track);
-      L.polyline(tp, { pane:"track", color:"#000", weight:4, opacity:0.35 }).addTo(trackLayer);
-      L.polyline(tp, { pane:"track", color:"#ffd23f", weight:2, opacity:0.95 }).addTo(trackLayer);
-      r.track.forEach(function (pt, i) {
+      var lw = trackTicks ? 2 : 1.6;
+      L.polyline(tp, { pane:"track", color:"#000", weight:lw + 2, opacity:0.35 }).addTo(trackLayer);
+      L.polyline(tp, { pane:"track", color:"#ffd23f", weight:lw, opacity:0.95 }).addTo(trackLayer);
+      if (trackTicks) r.track.forEach(function (pt, i) {
         L.circleMarker(pt, { pane:"track", radius:2.6, color:"#ffd23f", weight:1.5,
           fillColor:"#1a1a1a", fillOpacity:1 }).addTo(trackLayer);
         L.marker(pt, { pane:"track", icon: L.divIcon({ className:"trktick",
@@ -936,6 +981,7 @@ document.getElementById("opacity").addEventListener("input", function () {
   if (satLayer) satLayer.setOpacity(radarOpacity());
   if (usingFrames && buffers.length) buffers[frontBuf].setOpacity(radarOpacity());
   if (srvOverlay) srvOverlay.setOpacity(radarOpacity());
+  if (precipLayer) precipLayer.setOpacity(radarOpacity());
 });
 
 function toggleLayer(cb, layer) {
@@ -952,6 +998,7 @@ document.getElementById("c-warn").addEventListener("change", function () {
 });
 document.getElementById("c-cells").addEventListener("change", function () {
   cellMarkers.forEach(function (m) { this.checked ? m.addTo(map) : map.removeLayer(m); }, this);
+  document.getElementById("symlegend").style.display = this.checked ? "" : "none";
 });
 document.getElementById("c-tracks").addEventListener("change", function () {
   if (this.checked) trackLayer.addTo(map); else map.removeLayer(trackLayer);

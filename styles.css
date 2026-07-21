@@ -246,6 +246,20 @@ table.storm tbody tr:hover { background: #dbe7ff; cursor: pointer; }
 }
 #tilestatus.err { background: rgba(140,20,20,0.92); border-color: #e88; }
 
+/* storm-cell symbol legend (bottom-left, beside the zoom control) */
+#symlegend {
+  position: absolute; z-index: 500; left: 52px; bottom: 10px;
+  background: rgba(18,18,18,0.86); border: 1px solid #555; border-radius: 3px;
+  padding: 4px 7px; font-family: "Courier New", monospace; font-size: 10px; color: #e8eef5;
+}
+#symlegend .slhead { font-size: 9px; color: #9ab; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+#symlegend .slrow { white-space: nowrap; line-height: 1.5; }
+#symlegend .slsym { display: inline-block; width: 13px; text-align: center; font-weight: bold; text-shadow: 0 0 2px #000; }
+#symlegend .t-tor  { color: #c04fe0; }   /* tornado / TVS */
+#symlegend .t-meso { color: #ff9e2c; }   /* meso / flood  */
+#symlegend .t-hail { color: #ffe23a; }   /* severe / hail */
+#symlegend .t-cell { color: #7fb0ff; }   /* radar cell    */
+
 /* single-radar tilt viewer toolset (top-right) */
 #srvtool {
   position: absolute; z-index: 500; top: 8px; right: 8px; width: 148px;

@@ -120,6 +120,25 @@ toolset** (`#srvtool`) to slide through the tilts, toggle the product, and close
 - **Radar site icons enlarged** for visibility: 11 px dots (was 7), 2 px white ring + dark halo; NEXRAD =
   blue circle, TDWR = magenta rounded square; hover → amber glow.
 
+## Precipitation, symbol legend, track thinning (added 2026-07-21)
+- **MRMS precipitation layers** (product dropdown "Precipitation (MRMS QPE)"): 1-hr (≈ rate), 24-hr
+  (total), 72-hr (storm total), all in inches. Source = NOAA/NWS **MRMS QPE ImageServer** (keyless,
+  CORS-open, EPSG:3857) at `mapservices.weather.noaa.gov/.../obs/mrms_qpe/ImageServer`. It serves NO
+  XYZ tiles, so `PrecipTileLayer` (an `L.TileLayer` subclass) tiles it itself: each 256² tile is one
+  `exportImage?bbox=<tile's web-merc bbox>&bboxSR=3857&imageSR=3857&size=256,256&format=png&f=image&
+  renderingRule={"rasterFunction":"rft_1hr|rft_24hr|rft_72hr"}` call (server returns a colorized PNG).
+  `applyProduct` src `precip` → `showPrecip(rule)`; clears frames/sat/IEM, hides the dBZ legend (which
+  is refl-only now — also hidden for satellite), opacity slider drives it, static (no playbar).
+- **Storm-cell symbol legend** (`#symlegend`, bottom-left by the zoom control): explains the marker
+  glyphs ▼ Tornado/TVS · ◆ Meso/flood · ■ Severe/hail · ● Radar cell (bright color-coded on dark).
+  Visibility follows the `c-cells` (storm-cell markers) toggle.
+- **Track thinning by zoom** (`renderStorm`): tracks overlapped into mush when zoomed out (esp. the
+  15/30/45/60-min tick dots+labels — ~8 elements × N cells). Now progressive: **z≥9** all tracks +
+  ticks; **z8** all tracks, thinner, NO ticks (the ticks were the worst clutter); **z7** only
+  significant (warning-linked / TVS) tracks, radar-only cells drop theirs; below z7 none (data gated).
+  Verified live at KJKL: z9 = 39 paths/21 ticks, z8 = 84 paths/0 ticks, z7 = tracks thinned to the
+  significant few. `TRACK_MIN_ZOOM`=7 still gates the Level III fetch.
+
 ## Satellite & 2D reliability
 - **Satellite** (NASA GIBS / GOES-East, keyless, full-disk): products "Infrared (cloud tops)" =
   `GOES-East_ABI_Band13_Clean_Infrared` (Level6) and "GeoColor (visible)" = `GOES-East_ABI_GeoColor`
