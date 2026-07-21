@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Classic Radar &mdash; NEXRAD Selector</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="masthead">
+  <button id="menubtn" aria-label="Toggle controls">&#9776;</button>
+  <h1>CLASSIC RADAR</h1>
+  <span class="tag">NEXRAD / TDWR product selector &mdash; live NWS &amp; IEM data</span>
+  <span class="clock" id="clock">--:--:-- UTC</span>
+</div>
+
+<div id="app">
+
+  <!-- ===================== SIDEBAR ===================== -->
+  <div id="sidebar">
+
+    <div class="panel">
+      <h2>Radar Site</h2>
+      <div class="body">
+        <div class="row">
+          <label>Network</label>
+          <select id="network" class="full">
+            <option value="ALL">All sites</option>
+            <option value="WSR-88D">NEXRAD (WSR-88D)</option>
+            <option value="TDWR">TDWR (terminal)</option>
+          </select>
+        </div>
+        <div class="row">
+          <label>Site</label>
+          <select id="site" class="full"><option>loading&hellip;</option></select>
+        </div>
+        <div class="row">
+          <label>Jump</label>
+          <input type="text" id="findsite" class="full" placeholder="filter by id / city&hellip;">
+        </div>
+        <p class="hint" id="siteinfo">&nbsp;</p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Radar Product</h2>
+      <div class="body">
+        <div class="row">
+          <label>Product</label>
+          <select id="product" class="full">
+            <optgroup label="Reflectivity">
+              <option value="N0B" data-src="rv" data-scheme="2">Base Reflectivity 0.5&deg;</option>
+              <option value="NCR" data-src="rv" data-scheme="6">Composite Reflectivity</option>
+            </optgroup>
+            <optgroup label="Velocity">
+              <option value="N0U" data-src="unavail">Base Velocity 0.5&deg;</option>
+              <option value="SRV" data-src="unavail">Storm-Relative Velocity</option>
+            </optgroup>
+            <optgroup label="Derived">
+              <option value="VIL" data-src="unavail">Vertically Integ. Liquid</option>
+              <option value="EET" data-src="unavail">Echo Tops</option>
+            </optgroup>
+          </select>
+        </div>
+        <div class="row">
+          <label>Tilt</label>
+          <select id="tilt" class="full">
+            <option>0.5&deg;</option><option>0.9&deg;</option><option>1.3&deg;</option>
+            <option>1.8&deg;</option><option>2.4&deg;</option><option>3.1&deg;</option>
+            <option>4.0&deg;</option><option>4.3&deg;</option>
+          </select>
+        </div>
+        <p class="hint" id="prodnote">Animated loop of the last ~2&nbsp;h (RainViewer). Enable IEM below for a crisp true-dBZ current still.</p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Animation Loop</h2>
+      <div class="body">
+        <div class="row">
+          <label>Frames</label>
+          <select id="frames" class="full">
+            <option>6</option><option selected>12</option><option>18</option><option>24</option>
+          </select>
+        </div>
+        <div class="row">
+          <label>Speed</label>
+          <select id="speed" class="full">
+            <option value="700">Slow</option>
+            <option value="450" selected>Medium</option>
+            <option value="250">Fast</option>
+          </select>
+        </div>
+        <div class="row">
+          <label>Dwell</label>
+          <select id="dwell" class="full">
+            <option value="1">none</option>
+            <option value="3" selected>3&times; last frame</option>
+            <option value="5">5&times; last frame</option>
+          </select>
+        </div>
+        <p class="hint">RainViewer frames, ~10&nbsp;min apart. 24 frames &asymp; last 2&nbsp;hours.</p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Base Map / Clutter</h2>
+      <div class="body">
+        <div class="checkline"><input type="checkbox" id="c-base" checked><label for="c-base">Gray base map</label></div>
+        <div class="checkline"><input type="checkbox" id="c-county"><label for="c-county">County borders</label></div>
+        <div class="checkline"><input type="checkbox" id="c-hwy"><label for="c-hwy">Highways</label></div>
+        <div class="checkline"><input type="checkbox" id="c-city" checked><label for="c-city">City / place labels</label></div>
+        <div class="checkline"><input type="checkbox" id="c-warn" checked><label for="c-warn">NWS warning polygons</label></div>
+        <div class="checkline"><input type="checkbox" id="c-cells" checked><label for="c-cells">Storm-cell markers</label></div>
+        <div class="checkline"><input type="checkbox" id="c-tracks" checked><label for="c-tracks">Level III forecast tracks</label></div>
+        <div class="checkline"><input type="checkbox" id="c-iem"><label for="c-iem">IEM true-dBZ (crisp, current still)</label></div>
+        <div class="row" style="margin-top:6px">
+          <label>Radar opacity</label>
+          <input type="range" id="opacity" min="20" max="100" value="80" class="full">
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Actions</h2>
+      <div class="body">
+        <button class="act" id="refresh">Reload data</button>
+        <button class="act" id="recenter">Center on site</button>
+        <button class="act" id="view3d">3D volumetric view</button>
+        <p class="hint" id="datastatus">Initializing&hellip;</p>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ===================== STAGE ===================== -->
+  <div id="stage">
+    <div id="mapwrap">
+      <div id="map"></div>
+
+      <!-- clinical directional pan controls, classic-WU style -->
+      <div class="panbtn" id="pan-nw" style="left:6px;  top:6px;">NW</div>
+      <div class="panbtn" id="pan-n"  style="left:38px; top:6px;">N</div>
+      <div class="panbtn" id="pan-ne" style="left:70px; top:6px;">NE</div>
+      <div class="panbtn" id="pan-w"  style="left:6px;  top:38px;">W</div>
+      <div class="panbtn" id="pan-e"  style="left:70px; top:38px;">E</div>
+      <div class="panbtn" id="pan-sw" style="left:6px;  top:70px;">SW</div>
+      <div class="panbtn" id="pan-s"  style="left:38px; top:70px;">S</div>
+      <div class="panbtn" id="pan-se" style="left:70px; top:70px;">SE</div>
+
+      <div id="legend">
+        <div>dBZ &mdash; Base Reflectivity</div>
+        <div class="lgrid" id="legend-grid"></div>
+        <div class="lscale"><span>5</span><span>25</span><span>45</span><span>65</span><span>75</span></div>
+      </div>
+    </div>
+
+    <div id="playbar">
+      <button id="pp">&#9654; PLAY</button>
+      <button id="step-b">&#9668;</button>
+      <button id="step-f">&#9658;</button>
+      <span class="stamp" id="stamp">--</span>
+      <span class="spacer"></span>
+      <span>frame</span>
+      <input type="range" id="scrub" min="0" max="0" value="0">
+      <span id="frameidx">0/0</span>
+    </div>
+
+    <div id="tablewrap">
+      <div id="tablebar">
+        <button class="tabbtn active" id="tab-table">Storm Attribute Table</button>
+        <button class="tabbtn" id="tab-text">Level III Text</button>
+        <span class="spacer"></span>
+        <span class="status" id="tablestatus">&nbsp;</span>
+      </div>
+      <div id="tablebody">
+        <div class="empty">Loading storm interrogation data&hellip;</div>
+      </div>
+      <pre id="textreadout" style="display:none">Select a NEXRAD site with active storms to load the raw Level III storm-track text.</pre>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="sites.js"></script>
+<script src="bzip2.js"></script>
+<script src="level3.js"></script>
+<script src="volume3d.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

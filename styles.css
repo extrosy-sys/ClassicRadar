@@ -1,0 +1,344 @@
+/* Classic Radar - pre-acquisition Weather Underground NEXRAD selector look.
+   Clinical, boxy, data-dense. Arial for chrome, monospace for data. */
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #c8c8c8;
+  color: #101820;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 12px;
+}
+
+a { color: #003366; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---- Masthead ---- */
+#masthead {
+  background: #002b5c;
+  color: #e8eef5;
+  border-bottom: 2px solid #7f9ac0;
+  padding: 4px 8px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+#masthead h1 {
+  font-size: 15px;
+  margin: 0;
+  letter-spacing: 0.5px;
+  font-weight: bold;
+}
+#masthead .tag { color: #9fb8da; font-size: 11px; }
+#masthead .clock {
+  margin-left: auto;
+  font-family: "Courier New", monospace;
+  font-size: 12px;
+  color: #ffd23f;
+}
+
+/* ---- Layout ---- */
+#app {
+  display: flex;
+  align-items: stretch;
+  height: calc(100% - 27px);
+}
+#sidebar {
+  width: 250px;
+  min-width: 250px;
+  background: #dcdcdc;
+  border-right: 2px solid #808080;
+  overflow-y: auto;
+  padding: 6px;
+}
+#stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+#mapwrap {
+  position: relative;
+  flex: 1;
+  min-height: 260px;
+  background: #000;
+}
+#map { position: absolute; inset: 0; }
+
+/* ---- Sidebar panels ---- */
+.panel {
+  border: 1px solid #808080;
+  background: #f2f2f2;
+  margin-bottom: 6px;
+}
+.panel > h2 {
+  margin: 0;
+  padding: 3px 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: #4a6ea9;
+  color: #fff;
+  border-bottom: 1px solid #808080;
+}
+.panel .body { padding: 6px; }
+
+.row { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
+.row label { width: 78px; color: #333; }
+.row select, .row input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-family: Arial, sans-serif;
+  border: 1px solid #7a7a7a;
+  background: #fff;
+  padding: 1px 2px;
+}
+.full { width: 100%; }
+
+.checkline { display: flex; align-items: center; gap: 5px; margin: 2px 0; }
+.checkline input { margin: 0; }
+.hint { color: #666; font-size: 10px; margin: 3px 0 0; line-height: 1.3; }
+
+button.act {
+  font-size: 11px;
+  border: 1px solid #555;
+  background: linear-gradient(#fafafa, #d4d4d4);
+  padding: 2px 6px;
+  cursor: pointer;
+}
+button.act:hover { background: linear-gradient(#fff, #c8c8c8); }
+button.act:active { background: #b8b8b8; }
+
+/* ---- Playback bar ---- */
+#playbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #2b2b2b;
+  color: #ddd;
+  padding: 3px 8px;
+  border-top: 1px solid #000;
+  font-family: "Courier New", monospace;
+  font-size: 11px;
+}
+#playbar button {
+  font-family: "Courier New", monospace;
+  border: 1px solid #666;
+  background: #444;
+  color: #eee;
+  padding: 1px 7px;
+  cursor: pointer;
+}
+#playbar button:hover { background: #555; }
+#playbar .stamp { color: #ffd23f; min-width: 168px; }
+#playbar .spacer { flex: 1; }
+#playbar input[type="range"] { width: 150px; }
+
+/* ---- Pan arrows overlaid on map ---- */
+.panbtn {
+  position: absolute;
+  z-index: 500;
+  width: 26px;
+  height: 26px;
+  border: 1px solid #000;
+  background: rgba(30,30,30,0.72);
+  color: #fff;
+  font-family: "Courier New", monospace;
+  font-weight: bold;
+  cursor: pointer;
+  text-align: center;
+  line-height: 24px;
+  user-select: none;
+}
+.panbtn:hover { background: rgba(0,60,120,0.85); }
+
+/* ---- dBZ legend ---- */
+#legend {
+  position: absolute;
+  z-index: 500;
+  right: 6px;
+  bottom: 6px;
+  background: rgba(20,20,20,0.82);
+  color: #fff;
+  border: 1px solid #000;
+  padding: 4px 6px;
+  font-family: "Courier New", monospace;
+  font-size: 10px;
+}
+#legend .lgrid { display: flex; gap: 0; margin-top: 2px; }
+#legend .sw { width: 15px; height: 11px; }
+#legend .lscale { display: flex; justify-content: space-between; font-size: 9px; }
+
+/* ---- Storm attribute table ---- */
+#tablewrap {
+  height: 200px;
+  min-height: 120px;
+  overflow: auto;
+  background: #fff;
+  border-top: 2px solid #808080;
+}
+#tablebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #4a6ea9;
+  color: #fff;
+  padding: 2px 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+#tablebar .spacer { flex: 1; }
+#tablebar .status { text-transform: none; letter-spacing: 0; color: #dbe6f7; font-family: "Courier New", monospace; }
+
+table.storm {
+  border-collapse: collapse;
+  width: 100%;
+  font-family: "Courier New", monospace;
+  font-size: 11px;
+}
+table.storm th, table.storm td {
+  border: 1px solid #bbb;
+  padding: 2px 5px;
+  text-align: right;
+  white-space: nowrap;
+}
+table.storm th {
+  background: #e4e9f1;
+  color: #002b5c;
+  position: sticky;
+  top: 0;
+  text-align: center;
+}
+table.storm td.id, table.storm td.dir, table.storm td.ev { text-align: left; }
+table.storm tbody tr:nth-child(even) { background: #f4f6fa; }
+table.storm tbody tr.sel { background: #fff2b0; }
+table.storm tbody tr:hover { background: #dbe7ff; cursor: pointer; }
+.threat { font-weight: bold; padding: 0 2px; }
+.t-tor { color: #7a1fa2; }   /* TVS / tornado */
+.t-meso { color: #b06a00; }  /* mesocyclone */
+.t-hail { color: #8a7a00; }  /* hail */
+.empty { padding: 14px; color: #666; font-family: Arial; text-align: center; }
+
+/* storm-panel tabs + Level III text readout */
+#tablebar .tabbtn {
+  background: transparent; border: none; color: #cdddf3;
+  font-family: inherit; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+  padding: 3px 8px; cursor: pointer;
+}
+#tablebar .tabbtn.active { color: #fff; font-weight: bold; box-shadow: inset 0 -2px 0 #ffd23f; }
+#textreadout {
+  margin: 0; padding: 6px 8px;
+  font-family: "Courier New", monospace; font-size: 11px; line-height: 1.25;
+  color: #101820; white-space: pre; background: #fff;
+}
+
+/* storm-track time-hash labels (15/30/45/60 min) */
+.trktick {
+  color: #ffd23f; font: bold 10px "Courier New", monospace;
+  text-shadow: 0 0 2px #000, 0 0 2px #000; white-space: nowrap;
+  margin-left: 3px; margin-top: -6px;
+}
+
+/* ===================== 3D VOLUMETRIC OVERLAY ===================== */
+#vol3d {
+  position: fixed; inset: 0; z-index: 2000; display: none;
+  flex-direction: column; background: #0a0e14;
+}
+#v3-bar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: #001b3c; color: #e8eef5; padding: 5px 10px; font-size: 12px;
+  border-bottom: 2px solid #7f9ac0;
+}
+#v3-bar b { letter-spacing: 0.5px; }
+#v3-status { color: #9fb8da; font-family: "Courier New", monospace; }
+#v3-bar .v3-sp { flex: 1; }
+#v3-bar label { display: flex; align-items: center; gap: 4px; font-family: "Courier New", monospace; }
+#v3-count { color: #ffd23f; font-family: "Courier New", monospace; min-width: 78px; text-align: right; }
+#v3-close { background: #123a6b; color: #fff; border: 1px solid #7f9ac0; border-radius: 3px; padding: 3px 9px; cursor: pointer; }
+#v3-canvas { flex: 1; position: relative; min-height: 0; }
+#v3-canvas canvas { display: block; }
+
+/* threat glyphs drawn on map */
+.cellmark-wrap { pointer-events: none; }        /* only the label is clickable */
+.cellmark {
+  pointer-events: auto;
+  cursor: pointer;
+  display: inline-block;
+  font-family: "Courier New", monospace;
+  font-size: 11px;
+  font-weight: bold;
+  color: #fff;
+  padding: 1px 3px;
+  border-radius: 3px;
+  text-shadow: 0 0 2px #000, 0 0 2px #000, 0 0 3px #000;
+  white-space: nowrap;
+}
+/* map marker highlighted from a table-row hover */
+.cellmark-wrap.hi .cellmark {
+  background: rgba(0,60,120,0.75);
+  box-shadow: 0 0 0 2px #7fb0ff;
+}
+/* map marker for the currently selected storm cell - pulsing ring */
+.cellmark-wrap.sel { z-index: 1000 !important; }
+.cellmark-wrap.sel .cellmark {
+  font-size: 13px;
+  background: rgba(0,0,0,0.6);
+  box-shadow: 0 0 0 2px #ffd23f;
+  animation: cellpulse 1.1s ease-out infinite;
+}
+@keyframes cellpulse {
+  0%   { box-shadow: 0 0 0 2px #ffd23f, 0 0 0 0   rgba(255,210,63,0.75); }
+  100% { box-shadow: 0 0 0 2px #ffd23f, 0 0 0 16px rgba(255,210,63,0); }
+}
+
+/* mobile menu button (hidden on desktop) */
+#menubtn {
+  display: none;
+  background: #123a6b; color: #fff;
+  border: 1px solid #7f9ac0; border-radius: 3px;
+  font-size: 14px; line-height: 1; padding: 3px 9px; cursor: pointer;
+}
+
+/* row highlighted from a map-marker hover */
+table.storm tbody tr.mk-hi { background: #cfe0ff !important; }
+
+/* ===================== RESPONSIVE / MOBILE ===================== */
+@media (max-width: 760px) {
+  body { font-size: 13px; }
+  #masthead .tag { display: none; }
+  #masthead h1 { font-size: 14px; }
+  #masthead .clock { font-size: 11px; }
+  #menubtn { display: inline-block; }
+
+  #app { flex-direction: column; }
+
+  /* sidebar becomes a collapsible top drawer */
+  #sidebar {
+    width: 100%; min-width: 0;
+    display: none; padding: 6px; border-right: none;
+    border-bottom: 2px solid #808080;
+  }
+  body.controls-open #sidebar {
+    display: block;
+    max-height: 64vh; overflow-y: auto;
+  }
+
+  #stage { flex: 1; min-height: 0; }
+  #mapwrap { min-height: 46vh; }
+  #tablewrap { height: 40vh; }
+
+  .panbtn { width: 30px; height: 30px; line-height: 28px; }  /* bigger tap targets */
+  #legend { font-size: 9px; right: 4px; bottom: 4px; }
+
+  #playbar { flex-wrap: wrap; gap: 6px 8px; padding: 5px 8px; }
+  #playbar .stamp { min-width: 120px; }
+  #playbar input[type="range"] { width: 120px; }
+
+  table.storm th, table.storm td { padding: 5px 7px; }       /* taller rows to tap */
+  #tablebar { padding: 4px 8px; }
+}
