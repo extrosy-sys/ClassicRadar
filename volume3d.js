@@ -173,6 +173,15 @@ window.Volume3D = (function () {
       rebuild();          // show the primary radar immediately
       start();
 
+      // Velocity is a RADIAL measurement (wind component along each radar's own line of sight),
+      // so it CANNOT be max-combined across radars — the same parcel reads inbound (green) to one
+      // radar and outbound (red) to another, which just paints a meaningless red/green mash. Only
+      // reflectivity (a perspective-independent scalar) is safe to combine. Velocity stays single-radar.
+      if (product !== "refl") {
+        setStatus(label + " — single-radar velocity (radial, not combinable across radars).");
+        return;
+      }
+
       // then pull the nearest overlapping radars and grid them in (fills the cone of silence
       // over each radar + far-side low-altitude gaps a single radar can't see)
       var nbrs = nearbyRadars(site3, plat, plon, 3);
