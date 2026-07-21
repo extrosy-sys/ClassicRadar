@@ -44,6 +44,15 @@ window.Volume3D = (function () {
 
   var el, renderer, scene, camera, controls, cloud, floor, raf, sprite = null;
   var tilts = [], product = "refl", site3 = "", label = "";
+  var animFrames = [], animIdx = 0, animPlaying = false, animTimer = null;   // temporal loop
+
+  /* index each tilt's radials by 0.5° azimuth bucket so adjacent tilts can be interpolated */
+  function buildGrid(t) {
+    t.grid = {};
+    t.radials.forEach(function (r) { t.grid[Math.round(r.az * 2)] = r.levels; });
+    return t;
+  }
+  function activeTilts() { return animFrames.length ? animFrames[animIdx] : tilts; }
 
   /* soft radial sprite -> each point becomes a fuzzy transparent "blob" (volumetric cloud) */
   function getSprite() {
@@ -75,6 +84,40 @@ window.Volume3D = (function () {
     old.dispose();
   }
 
+  /* ---- temporal animation: loop the last K volume scans ---- */
+  function updateFidx() { var e = document.getElementById("v3-fidx"); if (e) e.textContent = animFrames.length ? (animIdx+1)+"/"+animFrames.length : ""; }
+  function stopAnim() {
+    animPlaying = false; if (animTimer) { clearInterval(animTimer); animTimer = null; }
+    var b = document.getElementById("v3-play"); if (b) b.textContent = "▶";
+  }
+  function playAnim() {
+    if (animFrames.length < 2) return;
+    animPlaying = true; document.getElementById("v3-play").textContent = "❚❚";
+    if (animTimer) clearInterval(animTimer);
+    animTimer = setInterval(function () { animIdx = (animIdx + 1) % animFrames.length; rebuild(); updateFidx(); }, 700);
+  }
+  function fetchFrames(K) {
+    stopAnim();
+    var p = PRODUCTS[product];
+    setStatus("Loading " + K + " frames of " + p.title + " for " + label + " …");
+    Promise.all(p.codes.map(function (c) { return Level3.latestKeys(site3, c, K); })).then(function (keyArrs) {
+      var jobs = [];
+      for (var i = 0; i < K; i++) (function (i) {
+        jobs.push(Promise.all(p.codes.map(function (c, ci) {
+          var arr = keyArrs[ci] || [], key = arr[i];
+          return key ? Level3.fetchTiltKey(key) : Promise.resolve(null);
+        })).then(function (ts) { return ts.filter(Boolean).map(buildGrid); }));
+      })(i);
+      Promise.all(jobs).then(function (frames) {
+        animFrames = frames.filter(function (f) { return f.length; });
+        if (animFrames.length < 2) { setStatus("Not enough recent frames available."); animFrames = []; updateFidx(); return; }
+        animIdx = animFrames.length - 1;
+        setStatus(label + " — " + animFrames.length + " frames loaded; ▶ to loop.");
+        updateFidx(); rebuild(); playAnim();
+      });
+    }).catch(function (e) { setStatus("Frame load failed: " + e.message); });
+  }
+
   function open(s3, lbl, prod) {
     build();
     product = PRODUCTS[prod] ? prod : "refl";
@@ -87,12 +130,16 @@ window.Volume3D = (function () {
   }
 
   function load() {
+    stopAnim(); animFrames = [];
+    var fr = document.getElementById("v3-frames");
+    if (fr) { fr.value = "1"; document.getElementById("v3-play").disabled = true; }
+    updateFidx();
     var p = PRODUCTS[product];
-    setStatus("Fetching 4 " + p.title + " tilts for " + label + " …");
+    setStatus("Fetching " + p.title + " tilts for " + label + " …");
     document.getElementById("v3-title").textContent = "VOLUMETRIC STORM — 3D " + p.title;
     Promise.all(p.codes.map(function (c) { return Level3.fetchTilt(site3, c); }))
       .then(function (res) {
-        tilts = res.filter(Boolean);
+        tilts = res.filter(Boolean).map(buildGrid);
         if (!tilts.length) { setStatus("No " + p.title + " data available for " + label + "."); if (cloud) { scene.remove(cloud); cloud = null; } return; }
         setStatus(label + " — tilts " + tilts.map(function (t){return t.elevation.toFixed(1)+"°";}).join(", ") +
           ". Drag orbit · scroll zoom · right-drag pan.");
@@ -104,28 +151,53 @@ window.Volume3D = (function () {
   }
 
   function rebuild() {
-    if (!tilts.length) return;
+    var ts = activeTilts();
+    if (!ts || !ts.length) return;
+    ts.forEach(function (t) { if (!t.grid) buildGrid(t); });
     var p = PRODUCTS[product];
     var thr = parseFloat(document.getElementById("v3-thresh").value);
     var vex = parseFloat(document.getElementById("v3-vex").value);
+    var fill = parseInt(document.getElementById("v3-fill").value, 10) || 0;
     var pos = [], col = [];
-    tilts.forEach(function (t) {
-      var e = t.elevation*Math.PI/180, cosE = Math.cos(e), sinE = Math.sin(e);
+    function plot(azDeg, g, gateKm, lv, sinE, cosE) {
+      var val = p.value(lv); if (!p.keep(lv, val, thr)) return;
+      var rng = (g + 0.5) * gateKm;
+      var h = Math.sqrt(rng*rng + Re*Re + 2*rng*Re*sinE) - Re;
+      var s = Re * Math.asin(rng*cosE/(Re+h));
+      var a = azDeg*Math.PI/180;
+      pos.push(s*Math.sin(a), h*vex, s*Math.cos(a));
+      var c = p.color(val); col.push(c[0], c[1], c[2]);
+    }
+    // real tilt slices
+    ts.forEach(function (t) {
+      var e = t.elevation*Math.PI/180, sinE = Math.sin(e), cosE = Math.cos(e);
       var maxG = Math.min(t.nbins, Math.floor(MAX_RANGE_KM / t.gateKm));
       t.radials.forEach(function (rad) {
-        var a = rad.az*Math.PI/180, sinA = Math.sin(a), cosA = Math.cos(a);
-        var Lv = rad.levels, n = Math.min(Lv.length, maxG);
-        for (var g = 0; g < n; g += 2) {
-          var lv = Lv[g]; if (lv < 2) continue;
-          var val = p.value(lv); if (!p.keep(lv, val, thr)) continue;
-          var rng = (g + 0.5) * t.gateKm;
-          var h = Math.sqrt(rng*rng + Re*Re + 2*rng*Re*sinE) - Re;
-          var s = Re * Math.asin(rng*cosE/(Re+h));
-          pos.push(s*sinA, h*vex, s*cosA);
-          var c = p.color(val); col.push(c[0], c[1], c[2]);
-        }
+        var n = Math.min(rad.levels.length, maxG);
+        for (var g = 0; g < n; g += 2) { var lv = rad.levels[g]; if (lv >= 2) plot(rad.az, g, t.gateKm, lv, sinE, cosE); }
       });
     });
+    // overlapping interpolated slices between adjacent tilts (fills the vertical gaps)
+    if (fill > 0 && ts.length > 1) {
+      var sorted = ts.slice().sort(function (a, b) { return a.elevation - b.elevation; });
+      for (var i = 0; i < sorted.length - 1; i++) {
+        var t0 = sorted[i], t1 = sorted[i+1], gk = t0.gateKm;
+        var maxG = Math.min(t0.nbins, t1.nbins, Math.floor(MAX_RANGE_KM / gk));
+        for (var k = 1; k <= fill; k++) {
+          var frac = k / (fill + 1);
+          var elev = t0.elevation + (t1.elevation - t0.elevation) * frac;
+          var e2 = elev*Math.PI/180, sinE2 = Math.sin(e2), cosE2 = Math.cos(e2);
+          for (var azKey in t0.grid) {
+            var l1 = t1.grid[azKey]; if (!l1) continue;
+            var l0 = t0.grid[azKey], az = azKey / 2;
+            for (var g2 = 0; g2 < maxG; g2 += 3) {
+              var v0 = l0[g2], v1 = l1[g2]; if (v0 < 2 || v1 < 2) continue;
+              plot(az, g2, gk, v0 + (v1 - v0) * frac, sinE2, cosE2);
+            }
+          }
+        }
+      }
+    }
     if (cloud) { scene.remove(cloud); cloud.geometry.dispose(); cloud.material.dispose(); }
     var geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
@@ -158,12 +230,12 @@ window.Volume3D = (function () {
         var im = new Image(); im.crossOrigin = "anonymous";
         im.onload = function () { ctx.drawImage(im, (tx-minTx)*256, (ty-minTy)*256); if (++done>=total) tex.needsUpdate = true; };
         im.onerror = function () { if (++done>=total) tex.needsUpdate = true; };
-        im.src = "https://a.basemaps.cartocdn.com/light_nolabels/"+Z+"/"+tx+"/"+ty+".png";
+        im.src = "https://a.basemaps.cartocdn.com/rastertiles/voyager/"+Z+"/"+tx+"/"+ty+".png";
       })(tx, ty);
     }
     var planeW = cv.width * kmPerPx, planeH = cv.height * kmPerPx;
     floor = new THREE.Mesh(new THREE.PlaneGeometry(planeW, planeH),
-      new THREE.MeshBasicMaterial({ map:tex, transparent:true, opacity:0.9, depthWrite:false, side:THREE.DoubleSide }));
+      new THREE.MeshBasicMaterial({ map:tex, transparent:false, opacity:1, depthWrite:true, side:THREE.DoubleSide }));
     floor.rotation.x = Math.PI/2;   // lay flat: image north -> +Z, east -> +X
     var offX = cx - minTx*256, offY = cy - minTy*256;
     floor.position.set((cv.width/2 - offX) * kmPerPx, -0.15, (offY - cv.height/2) * kmPerPx);
@@ -191,6 +263,10 @@ window.Volume3D = (function () {
         '<label>Opac <input type="range" id="v3-op" min="8" max="100" value="55"></label>' +
         '<label>Size <input type="range" id="v3-size" min="1" max="10" value="2" step="0.5"></label>' +
         '<label>V× <input type="range" id="v3-vex" min="1" max="12" value="5" step="0.5"></label>' +
+        '<label>Fill <select id="v3-fill"><option>0</option><option selected>1</option><option>2</option></select></label>' +
+        '<label>Frames <select id="v3-frames"><option value="1" selected>1</option><option value="4">4</option>' +
+          '<option value="8">8</option></select></label>' +
+        '<button id="v3-play" disabled>▶</button><span id="v3-fidx"></span>' +
         '<span id="v3-count"></span>' +
         '<button id="v3-close">× CLOSE</button>' +
       '</div><div id="v3-canvas"></div>';
@@ -214,6 +290,14 @@ window.Volume3D = (function () {
     document.getElementById("v3-op").oninput = updateMaterial;      // live, no geometry rebuild
     document.getElementById("v3-size").oninput = updateMaterial;
     document.getElementById("v3-mode").onchange = updateMaterial;
+    document.getElementById("v3-fill").onchange = rebuild;
+    document.getElementById("v3-frames").onchange = function () {
+      var k = parseInt(this.value, 10);
+      document.getElementById("v3-play").disabled = k < 2;
+      if (k > 1) fetchFrames(k);
+      else { stopAnim(); animFrames = []; updateFidx(); rebuild(); }
+    };
+    document.getElementById("v3-play").onclick = function () { animPlaying ? stopAnim() : playAnim(); };
     document.getElementById("v3-prod").onchange = function () { product = this.value; configSlider(); load(); };
     window.addEventListener("resize", resize);
     resize();

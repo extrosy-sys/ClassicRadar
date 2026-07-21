@@ -57,8 +57,14 @@ Y-up with a vertical-exaggeration slider. Range capped 160 km, gate stride 2.
 - **Opacity + Blob mode** (`makeMaterial`): Opac slider (default 55%) makes the cloud translucent
   with `depthWrite:false` so you see through the top tilt to the layers below. Mode = Points (square
   gates) or **Blobs** — a soft radial sprite (`getSprite`) turns each gate into a fuzzy transparent
-  puff, so the overlap builds volumetric "clouds". Opac/Size/Mode update the material live (no
-  geometry rebuild); threshold/V× rebuild the geometry.
+  puff, so the overlap builds volumetric "clouds". Opac/Size/Mode update the material live.
+- **Fill (interpolated slices)**: between adjacent tilts, `rebuild()` interpolates gate values by
+  0.5° azimuth bucket (`buildGrid` indexes each tilt) at 1–2 intermediate elevations, filling the
+  large vertical gaps between the 4 real tilts. Floor is the labeled CARTO **Voyager** map (opaque)
+  so cities/roads read.
+- **Animation**: Frames = 4/8 fetches the last K volume scans (`Level3.latestKeys` + `fetchTiltKey`
+  per tilt code), builds a grid-indexed tilt set per frame, and the ▶ button loops them (rebuild per
+  frame at 700 ms), interpolation and all.
 
 ## Satellite & 2D reliability
 - **Satellite** (NASA GIBS / GOES-East, keyless, full-disk): products "Infrared (cloud tops)" =
@@ -66,8 +72,17 @@ Y-up with a vertical-exaggeration slider. Range capped 160 km, gate stride 2.
   (Level7). GIBS WMTS REST is `{z}/{y}/{x}` (row/col) — matches Leaflet's `{z}/{y}/{x}`. `time=default`
   gives the latest scan. Static (playbar disabled).
 - **Tile retry** (`attachRetry`): radar/IEM/satellite layers re-request a tile on `tileerror` (up to
-  2×, cache-busted) — fixes the rectangular holes RainViewer sometimes left. RainViewer radar is
-  clamped to `maxNativeZoom:7` (its mosaic max); IEM to 14.
+  2×, cache-busted). RainViewer radar clamped to `maxNativeZoom:7` (its mosaic max); IEM to 12.
+- **Auto-IEM on zoom** (`syncIem`): RainViewer's ~2 km mosaic turns to blocks when zoomed in, so at
+  zoom ≥ 9 (reflectivity products) the crisp IEM layer auto-shows on top; zoom back out for the loop.
+  The `c-iem` checkbox forces IEM on at any zoom.
+
+## Storm tracks — multi-radar + declutter
+`loadStormData` fetches NST from EVERY WSR-88D whose site is in view (nearest `MAX_L3_SITES`=5,
+3-min `l3Cache`), so a whole storm field is covered, not just one radar — verified 3 radars
+(KILN,KRLX,KLVX) at once. Below `TRACK_MIN_ZOOM`=7 it skips Level III entirely so tracks/cells don't
+overlap into mush (only NWS warnings show). Cells keyed by unique `key` (`id#siteIdx`) since ids
+collide across radars; display stays the short id.
 
 ## Level III on the web (added 2026-07-21 — parity with the Android app)
 The Unidata bucket `unidata-nexrad-level3.s3.amazonaws.com` sends `Access-Control-Allow-Origin: *`,

@@ -100,9 +100,23 @@ function clearFrames() {
   frameLayers.forEach(function (l) { map.removeLayer(l); });
   frameLayers = []; frameTimes = [];
 }
+
+/* RainViewer is only a ~2 km mosaic (native z7), so it turns to coarse blocks when zoomed
+   in. IEM is crisp to z12. Auto-show the crisp IEM layer (on top) once zoomed past IEM_ZOOM
+   for reflectivity products; the manual "IEM true-dBZ" checkbox forces it on at any zoom. */
+var IEM_ZOOM = 9;
+function currentProductSrc() {
+  var p = document.getElementById("product");
+  return p.options[p.selectedIndex].getAttribute("data-src");
+}
+function syncIem() {
+  var manual = document.getElementById("c-iem").checked;
+  var auto = currentProductSrc() === "rv" && map.getZoom() >= IEM_ZOOM;
+  showIem(manual || auto);
+}
 function showIem(on) {
   if (on && !iemLayer) {
-    iemLayer = attachRetry(L.tileLayer(IEM_URL, { pane:"radar", opacity:radarOpacity(), maxZoom:18, maxNativeZoom:14,
+    iemLayer = attachRetry(L.tileLayer(IEM_URL, { pane:"radar", opacity:radarOpacity(), maxZoom:18, maxNativeZoom:12,
       noWrap:true, zIndex:20, attribution:"Base reflectivity &copy; Iowa Environmental Mesonet" })).addTo(map);
   } else if (!on && iemLayer) {
     map.removeLayer(iemLayer); iemLayer = null;
@@ -192,9 +206,10 @@ function applyProduct() {
     clearSat();
     setPlaybar(true);
     note.textContent = opt.text.replace(/&deg;/g,"°") +
-      " — animated loop of the last ~2 h (RainViewer, ~2 km mosaic; pixelates when zoomed past ~z7). " +
-      "For crisp detail when zoomed in, tick “IEM true-dBZ” below.";
+      " — animated ~2 h loop (RainViewer, ~2 km mosaic). Zoom in and it auto-switches to the " +
+      "crisp IEM true-dBZ current scan; zoom back out for the loop.";
     loadRainViewer();
+    syncIem();
   } else if (src === "sat") {
     clearFrames();
     setPlaybar(false);
@@ -217,6 +232,7 @@ function applyProduct() {
     note.textContent = opt.text.replace(/&deg;/g,"°") + " — not available as a national 2D layer.";
     document.getElementById("stamp").textContent = "product n/a";
   }
+  syncIem();   // hide auto-IEM for non-reflectivity products (unless manually forced on)
 }
 function setPlaybar(on) {
   ["pp","step-b","step-f","scrub"].forEach(function (id) {
@@ -364,39 +380,75 @@ var WARN_URL = "https://api.weather.gov/alerts/active?status=actual&message_type
   "&event=Tornado%20Warning&event=Severe%20Thunderstorm%20Warning" +
   "&event=Flash%20Flood%20Warning&event=Special%20Marine%20Warning";
 
-/* Fetch NWS warnings (event-filtered so the relevant ones aren't truncated) plus the
-   nearest NEXRAD's live Level III storm-track product, then render both together. */
+/* below this zoom, storm tracks/cells clutter into each other — hide Level III entirely
+   (and skip the multi-radar fetches). Tracks come from EVERY WSR-88D whose site sits in
+   view (up to MAX_L3_SITES nearest the centre), so a whole storm field is covered, not one radar. */
+var TRACK_MIN_ZOOM = 7;
+var MAX_L3_SITES = 5;
+var l3Cache = {};   // site3 -> { t, result } (3-min TTL, so panning doesn't refetch)
+
+function sitesInView() {
+  var b = map.getBounds().pad(0.1), c = map.getCenter();
+  var list = sites.filter(function (s) {
+    return s.net === "WSR-88D" &&
+      s.lat >= b.getSouth() && s.lat <= b.getNorth() && s.lon >= b.getWest() && s.lon <= b.getEast();
+  });
+  list.sort(function (a, d) { return haversine(c.lat, c.lng, a.lat, a.lon) - haversine(c.lat, c.lng, d.lat, d.lon); });
+  return list.slice(0, MAX_L3_SITES);
+}
+function fetchNstCached(site3) {
+  var e = l3Cache[site3];
+  if (e && Date.now() - e.t < 180000) return Promise.resolve(e.result);
+  return Level3.fetchStormTrack(site3)
+    .then(function (r) { l3Cache[site3] = { t: Date.now(), result: r }; return r; })
+    .catch(function () { return null; });
+}
+
 function loadStormData() {
   setTableStatus("querying NWS + Level III…");
-  var c = map.getCenter();
-  var site = nearestSite(c.lat, c.lng);
   var warnP = fetch(WARN_URL, { headers:{ "Accept":"application/geo+json" } })
     .then(function (r) { return r.ok ? r.json() : { features: [] }; })
     .then(function (j) { return j.features || []; })
     .catch(function () { return []; });
-  var l3P = site ? Level3.fetchStormTrack(Level3.site3(site.id)) : Promise.resolve(null);
-  return Promise.all([warnP, l3P]).then(function (res) { renderStorm(res[0], res[1], site); });
+  var svs = [];
+  if (map.getZoom() >= TRACK_MIN_ZOOM) {
+    svs = sitesInView();
+    if (!svs.length) { var c = map.getCenter(); var n = nearestSite(c.lat, c.lng); if (n) svs = [n]; }
+  }
+  var l3P = Promise.all(svs.map(function (s) {
+    return fetchNstCached(Level3.site3(s.id)).then(function (r) { return { site: s, result: r }; });
+  }));
+  return Promise.all([warnP, l3P]).then(function (res) {
+    renderStorm(res[0], res[1].filter(function (x) { return x.result; }));
+  });
 }
 var loadWarnings = loadStormData;   // back-compat alias
 
-function renderStorm(features, l3, site) {
+function renderStorm(features, l3List) {
   warnLayer.clearLayers();
   trackLayer.clearLayers();
   cellMarkers.forEach(function (m){ map.removeLayer(m); });
   cellMarkers = []; rowsById = {}; cellRefs = {}; selectedId = null;
-  lastL3 = l3;
+  lastL3 = l3List[0] ? l3List[0].result : null;
 
   var bounds = map.getBounds().pad(0.15);
+  var showTracks = map.getZoom() >= TRACK_MIN_ZOOM && document.getElementById("c-tracks").checked;
   var rows = [];
 
-  // 1) Level III tracked cells: real id / position / motion / forecast track
-  if (l3 && l3.cells) l3.cells.forEach(function (c) {
-    rows.push({
-      id: c.id, glyph: "●", cls: "t-cell", threat: "cell", event: "Radar cell",
-      hail: null, wind: null,
-      dir: (c.headingToward != null ? compass(c.headingToward) : "—"),
-      spd: c.speedKt >= 0 ? c.speedKt : null,
-      area: "", expires: null, center: [c.lat, c.lon], track: c.forecast, tvs: false
+  // 1) Level III cells from every in-view radar (only those within the padded view)
+  l3List.forEach(function (entry, si) {
+    var res = entry.result;
+    if (!res || !res.cells) return;
+    res.cells.forEach(function (c) {
+      if (c.lat < bounds.getSouth() || c.lat > bounds.getNorth() ||
+          c.lon < bounds.getWest() || c.lon > bounds.getEast()) return;
+      rows.push({
+        key: c.id + "#" + si, id: c.id, site: entry.site.id,
+        glyph: "●", cls: "t-cell", threat: "cell", event: "Radar cell · " + entry.site.id,
+        hail: null, wind: null, dir: (c.headingToward != null ? compass(c.headingToward) : "—"),
+        spd: c.speedKt >= 0 ? c.speedKt : null,
+        area: "", expires: null, center: [c.lat, c.lon], track: c.forecast, tvs: false
+      });
     });
   });
 
@@ -421,7 +473,7 @@ function renderStorm(features, l3, site) {
       if (d < bestKm) { bestKm = d; target = r; }
     });
     if (!(target && bestKm < 40)) {
-      target = { id: cellId(rows.length), center: cen, track: [] };
+      target = { key: "W#" + rows.length, id: cellId(rows.length), center: cen, track: [] };
       rows.push(target);
     }
     if (code === "TOR" || (torDet && /OBSERVED/i.test(torDet))) { target.glyph="▼"; target.cls="t-tor"; target.threat="tvs"; target.tvs=true; }
@@ -445,15 +497,15 @@ function renderStorm(features, l3, site) {
   // 3) markers + forecast tracks + refs
   rows.forEach(function (r) {
     if (!r.glyph) { r.glyph = "●"; r.cls = "t-cell"; r.threat = "cell"; r.event = r.event || "Radar cell"; }
-    if (r.track && r.track.length && r.center && document.getElementById("c-tracks").checked) {
+    if (showTracks && r.track && r.track.length && r.center) {
       var tp = [r.center].concat(r.track);
-      L.polyline(tp, { pane:"track", color:"#000", weight:4, opacity:0.35 }).addTo(trackLayer);   // shadow
-      L.polyline(tp, { pane:"track", color:"#ffd23f", weight:2, opacity:0.95 }).addTo(trackLayer); // track
+      L.polyline(tp, { pane:"track", color:"#000", weight:4, opacity:0.35 }).addTo(trackLayer);
+      L.polyline(tp, { pane:"track", color:"#ffd23f", weight:2, opacity:0.95 }).addTo(trackLayer);
       r.track.forEach(function (pt, i) {
         L.circleMarker(pt, { pane:"track", radius:2.6, color:"#ffd23f", weight:1.5,
-          fillColor:"#1a1a1a", fillOpacity:1 }).addTo(trackLayer);                                 // time hash
+          fillColor:"#1a1a1a", fillOpacity:1 }).addTo(trackLayer);
         L.marker(pt, { pane:"track", icon: L.divIcon({ className:"trktick",
-          html:((i + 1) * 15) + "′", iconSize:[0,0] }) }).addTo(trackLayer);                       // 15/30/45/60 min
+          html:((i + 1) * 15) + "′", iconSize:[0,0] }) }).addTo(trackLayer);
       });
     }
     var marker = null;
@@ -461,33 +513,35 @@ function renderStorm(features, l3, site) {
       marker = L.marker(r.center, { pane:"cells", icon: L.divIcon({
         className:"cellmark-wrap", iconSize:[0,0],
         html:'<span class="cellmark ' + r.cls + '">' + r.glyph + " " + r.id + "</span>" }) });
-      (function (rid) {
-        marker.on("click", function(){ selectRow(rid); });
-        marker.on("mouseover", function(){ hoverCell(rid, true); });
-        marker.on("mouseout", function(){ hoverCell(rid, false); });
-      })(r.id);
+      (function (key) {
+        marker.on("click", function(){ selectRow(key); });
+        marker.on("mouseover", function(){ hoverCell(key, true); });
+        marker.on("mouseout", function(){ hoverCell(key, false); });
+      })(r.key);
       cellMarkers.push(marker);
       if (document.getElementById("c-cells").checked) marker.addTo(map);
     }
-    cellRefs[r.id] = { marker:marker, poly:r._poly || null, color:r._color || "#4a6ea9", center:r.center };
+    cellRefs[r.key] = { marker:marker, poly:r._poly || null, color:r._color || "#4a6ea9", center:r.center };
   });
 
   buildTable(rows);
 
   var tr = document.getElementById("textreadout");
-  if (l3 && l3.rawText && l3.rawText.trim()) {
-    tr.textContent = "Site " + (site ? site.id : "?") + "   product " + l3.productCode +
-      "   volume " + l3.volTime + "\n\n" + l3.rawText;
+  var texts = l3List.filter(function (e) { return e.result && e.result.rawText && e.result.rawText.trim(); });
+  if (texts.length) {
+    tr.textContent = texts.map(function (e) {
+      return "══ " + e.site.id + "  vol " + e.result.volTime + " ══\n" + e.result.rawText;
+    }).join("\n\n");
+  } else if (map.getZoom() < TRACK_MIN_ZOOM) {
+    tr.textContent = "Zoom in (≥ z" + TRACK_MIN_ZOOM + ") to load Level III storm tracks — they're hidden when zoomed out so they don't overlap.";
   } else {
-    tr.textContent = "No Level III storm-track text for " + (site ? site.id : "this area") +
-      " right now — the radar's SCIT algorithm isn't tracking discrete cells.\n" +
-      "The table above is populated from live NWS warning tags.";
+    tr.textContent = "No Level III storm-track cells in view right now (SCIT isn't tracking discrete cells).\nThe table is populated from live NWS warning tags.";
   }
 
-  var l3n = (l3 && l3.cells) ? l3.cells.length : 0;
-  setTableStatus(rows.length + " cell(s) · " + l3n + " Level III · " +
-    (site ? site.id : "?") + (l3 && l3.volTime ? " vol " + l3.volTime : "") +
-    " · " + fmtStamp(new Date()).slice(11));
+  var l3n = rows.filter(function (r) { return r.threat === "cell"; }).length;
+  var radars = l3List.map(function (e) { return e.site.id; });
+  setTableStatus(rows.length + " cell(s) · " + l3n + " Level III" +
+    (radars.length ? " (" + radars.join(",") + ")" : "") + " · " + fmtStamp(new Date()).slice(11));
 }
 
 function buildTable(rows) {
@@ -503,8 +557,8 @@ function buildTable(rows) {
     '<th>Max Wind (kt)</th><th>Dir</th><th>Spd (kt)</th><th>Area</th><th>Expires</th>' +
     '</tr></thead><tbody>';
   rows.forEach(function (r) {
-    rowsById[r.id] = r;
-    h += '<tr data-id="' + r.id + '">' +
+    rowsById[r.key] = r;
+    h += '<tr data-key="' + r.key + '">' +
       '<td class="id">' + r.id + '</td>' +
       '<td class="ev"><span class="threat ' + r.cls + '">' + r.glyph + "</span> " + r.threat.toUpperCase() + '</td>' +
       '<td class="ev">' + r.event + '</td>' +
@@ -518,29 +572,29 @@ function buildTable(rows) {
   });
   h += "</tbody></table>";
   body.innerHTML = h;
-  body.querySelectorAll("tr[data-id]").forEach(function (tr) {
-    var rid = tr.getAttribute("data-id");
-    tr.addEventListener("click", function () { selectRow(rid); });
-    tr.addEventListener("mouseenter", function () { hoverCell(rid, true); });
-    tr.addEventListener("mouseleave", function () { hoverCell(rid, false); });
+  body.querySelectorAll("tr[data-key]").forEach(function (tr) {
+    var key = tr.getAttribute("data-key");
+    tr.addEventListener("click", function () { selectRow(key); });
+    tr.addEventListener("mouseenter", function () { hoverCell(key, true); });
+    tr.addEventListener("mouseleave", function () { hoverCell(key, false); });
   });
 }
 function isMobile() { return window.matchMedia("(max-width: 760px)").matches; }
 
 /* transient highlight of a cell's row + marker on hover (either direction) */
-function hoverCell(id, on) {
-  var tr = document.querySelector('tr[data-id="' + id + '"]');
+function hoverCell(key, on) {
+  var tr = document.querySelector('tr[data-key="' + key + '"]');
   if (tr) tr.classList.toggle("mk-hi", on);
-  var ref = cellRefs[id];
+  var ref = cellRefs[key];
   var el = ref && ref.marker && ref.marker.getElement();
   if (el) el.classList.toggle("hi", on);
 }
 
 /* persistent selection linking one table row <-> one map cell */
-function selectRow(id) {
-  selectedId = id;
-  document.querySelectorAll("tr[data-id]").forEach(function (tr) {
-    tr.classList.toggle("sel", tr.getAttribute("data-id") === id);
+function selectRow(key) {
+  selectedId = key;
+  document.querySelectorAll("tr[data-key]").forEach(function (tr) {
+    tr.classList.toggle("sel", tr.getAttribute("data-key") === key);
   });
   // reset every marker/polygon, then emphasize the chosen one
   Object.keys(cellRefs).forEach(function (k) {
@@ -549,16 +603,16 @@ function selectRow(id) {
     if (el) el.classList.remove("sel");
     if (ref.poly) ref.poly.setStyle({ weight:2.5, fillOpacity:0.15 });
   });
-  var ref = cellRefs[id];
+  var ref = cellRefs[key];
   if (ref) {
     var el = ref.marker && ref.marker.getElement();
     if (el) el.classList.add("sel");
     if (ref.poly) ref.poly.setStyle({ weight:4, fillOpacity:0.38, color:ref.color });
   }
-  var r = rowsById[id];
+  var r = rowsById[key];
   if (r && r.center) map.flyTo(r.center, Math.max(map.getZoom(), 8), { duration:0.6 });
 
-  var selTr = document.querySelector('tr[data-id="' + id + '"]');
+  var selTr = document.querySelector('tr[data-key="' + key + '"]');
   if (selTr) selTr.scrollIntoView({ block:"nearest" });
   // on a phone the map sits above the table - bring it into view so the ping is seen
   if (isMobile()) document.getElementById("mapwrap").scrollIntoView({ behavior:"smooth", block:"start" });
@@ -662,9 +716,8 @@ document.getElementById("c-cells").addEventListener("change", function () {
 document.getElementById("c-tracks").addEventListener("change", function () {
   if (this.checked) trackLayer.addTo(map); else map.removeLayer(trackLayer);
 });
-document.getElementById("c-iem").addEventListener("change", function () {
-  showIem(this.checked);
-});
+document.getElementById("c-iem").addEventListener("change", syncIem);
+map.on("zoomend", syncIem);
 
 /* storm panel tabs: table <-> raw Level III text */
 function showTab(text) {

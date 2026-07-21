@@ -49,6 +49,32 @@ window.Level3 = {
     }).catch(function () { return null; });
   },
 
+  /** last k keys for a product (newest last), walking back a few UTC days if a day is short. */
+  latestKeys: function (site3, product, k) {
+    var self = this, all = [];
+    function ymd(d) { return d.getUTCFullYear()+"_"+p2(d.getUTCMonth()+1)+"_"+p2(d.getUTCDate()); }
+    function day(off) {
+      if (off > 3) return Promise.resolve(all.slice(-k));
+      var d = new Date(Date.now() - off*86400000);
+      return fetch(self.BUCKET + "?list-type=2&prefix=" + site3 + "_" + product + "_" + ymd(d) + "&max-keys=1000")
+        .then(function (r) { return r.ok ? r.text() : ""; })
+        .then(function (xml) {
+          var keys = (xml.match(/<Key>([^<]+)<\/Key>/g) || []).map(function (m) { return m.replace(/<\/?Key>/g, ""); });
+          all = keys.concat(all);                    // older day prepended -> stays ascending
+          return all.length >= k ? all.slice(-k) : day(off + 1);
+        }).catch(function () { return day(off + 1); });
+    }
+    return day(0);
+  },
+
+  /** fetch + decode a specific reflectivity/velocity key (for animation frames). */
+  fetchTiltKey: function (key) {
+    var self = this;
+    return fetch(this.BUCKET + key).then(function (r) { return r.ok ? r.arrayBuffer() : null; })
+      .then(function (buf) { return buf ? self.decodeReflectivity(new Uint8Array(buf)) : null; })
+      .catch(function () { return null; });
+  },
+
   /** Fetch + decode one super-res reflectivity tilt (N0B/N1B/N2B/N3B) for a 3D volume.
       Returns { elevation(deg), gateKm, nbins, radials:[{az, levels:Uint8Array}] } or null. */
   fetchTilt: function (site3, product) {
