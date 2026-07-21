@@ -237,6 +237,25 @@ table.storm tbody tr:hover { background: #dbe7ff; cursor: pointer; }
   color: #101820; white-space: pre; background: #fff;
 }
 
+/* tile loading / error status */
+#tilestatus {
+  position: absolute; z-index: 500; left: 50%; transform: translateX(-50%);
+  bottom: 8px; padding: 3px 10px; border-radius: 3px;
+  font-family: "Courier New", monospace; font-size: 11px; color: #fff;
+  background: rgba(20,40,70,0.9); border: 1px solid #7f9ac0;
+}
+#tilestatus.err { background: rgba(140,20,20,0.92); border-color: #e88; }
+
+/* radar site icons on the map */
+.siteicon .sdot {
+  display: block; width: 7px; height: 7px; border-radius: 50%;
+  background: #123a6b; border: 1.5px solid #fff; box-shadow: 0 0 2px #000; cursor: pointer;
+}
+.siteicon.tdwr .sdot { background: #9c1f7a; border-radius: 1px; }
+.siteicon:hover .sdot { background: #ffd23f; transform: scale(1.4); }
+.sitepop { font-size: 11px; line-height: 1.35; }
+.sitepop button { font-size: 11px; margin-top: 5px; margin-right: 4px; padding: 2px 6px; cursor: pointer; }
+
 /* storm-track time-hash labels (15/30/45/60 min) */
 .trktick {
   color: #ffd23f; font: bold 10px "Courier New", monospace;

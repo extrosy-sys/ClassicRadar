@@ -36,6 +36,7 @@ function pane(name, z) { map.createPane(name); map.getPane(name).style.zIndex = 
 pane("radar", 250);
 pane("clutter", 350);
 pane("warn", 400);
+pane("sites", 500);
 pane("track", 620);
 pane("cells", 640);
 
@@ -65,9 +66,24 @@ var dwellLeft = 0;
 
 function radarOpacity() { return parseInt(document.getElementById("opacity").value, 10) / 100; }
 
-/* Re-request tiles that fail to load (transient RainViewer / rate-limit misses that
-   otherwise leave a rectangular hole in the mosaic). Up to 2 retries with a cache-bust. */
-function attachRetry(layer) {
+/* ---- tile loading / error status (bottom of the map) ---- */
+var tileErrCount = 0, tileStatusTimer = null;
+function setTileStatus(msg, kind) {
+  var el = document.getElementById("tilestatus");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.className = kind || "";
+  el.style.display = msg ? "block" : "none";
+  clearTimeout(tileStatusTimer);
+  if (msg && kind === "err") tileStatusTimer = setTimeout(function () { el.style.display = "none"; }, 4000);
+}
+
+/* Re-request tiles that fail to load (transient RainViewer / rate-limit misses that would
+   otherwise leave a hole), and surface loading / error status. Up to 2 retries, cache-busted. */
+function attachRetry(layer, name) {
+  var label = name || "Radar";
+  layer.on("loading", function () { tileErrCount = 0; setTileStatus(label + " — loading tiles…", "load"); });
+  layer.on("load", function () { setTileStatus("", "ok"); });
   layer.on("tileerror", function (e) {
     var t = e.tile;
     if (!t) return;
@@ -75,6 +91,9 @@ function attachRetry(layer) {
     if (t._retry <= 2) {
       var base = t.src.split("#")[0];
       setTimeout(function () { t.src = base + "#r" + t._retry; }, 400 * t._retry);
+    } else {
+      tileErrCount++;
+      setTileStatus(label + " — " + tileErrCount + " tile(s) failed to load", "err");
     }
   });
   return layer;
@@ -93,7 +112,7 @@ function showSat(kind) {
   clearSat();
   var g = GIBS[kind]; if (!g) return;
   satLayer = attachRetry(L.tileLayer(g.url, { pane:"radar", opacity:g.opacity, maxZoom:18,
-    maxNativeZoom:g.maxNative, noWrap:true, attribution:"Satellite &copy; NASA GIBS / NOAA GOES-East" })).addTo(map);
+    maxNativeZoom:g.maxNative, noWrap:true, attribution:"Satellite &copy; NASA GIBS / NOAA GOES-East" }), "Satellite").addTo(map);
 }
 
 function clearFrames() {
@@ -111,13 +130,13 @@ function currentProductSrc() {
 }
 function syncIem() {
   var manual = document.getElementById("c-iem").checked;
-  var auto = currentProductSrc() === "rv" && map.getZoom() >= IEM_ZOOM;
-  showIem(manual || auto);
+  if (currentProductSrc() !== "rv") { showIem(manual); return; }
+  showIem(manual || !usingFrames);      // reliable IEM base whenever not actively looping
 }
 function showIem(on) {
   if (on && !iemLayer) {
     iemLayer = attachRetry(L.tileLayer(IEM_URL, { pane:"radar", opacity:radarOpacity(), maxZoom:18, maxNativeZoom:12,
-      noWrap:true, zIndex:20, attribution:"Base reflectivity &copy; Iowa Environmental Mesonet" })).addTo(map);
+      noWrap:true, zIndex:20, attribution:"Base reflectivity &copy; Iowa Environmental Mesonet" }), "IEM base reflectivity").addTo(map);
   } else if (!on && iemLayer) {
     map.removeLayer(iemLayer); iemLayer = null;
   }
@@ -145,19 +164,33 @@ function loadRainViewer() {
         // RainViewer's radar mosaic is only rendered to z7; above that its server returns a
         // "Zoom Level Not Supported" tile. Clamp to z7 so Leaflet upscales those pixels instead.
         var lyr = attachRetry(L.tileLayer(url, { pane:"radar", opacity:0, maxZoom:18, maxNativeZoom:7, noWrap:true,
-          attribution:"Radar &copy; RainViewer" })).addTo(map);
+          attribution:"Radar &copy; RainViewer" }), "RainViewer loop").addTo(map);
         frameLayers.push(lyr);
         frameTimes.push(f.time);
       });
       curFrame = frameLayers.length - 1;
       wireScrub();
-      showFrame(curFrame);
+      goLive();                    // default to the reliable IEM current scan; PLAY switches to the loop
       return true;
     });
 }
 
+var usingFrames = false;   // true while showing the RainViewer loop; false = reliable IEM "live"
+
+/* return to the reliable IEM current scan (shown at every zoom) */
+function goLive() {
+  usingFrames = false;
+  frameLayers.forEach(function (l) { l.setOpacity(0); });
+  if (currentProductSrc() === "rv") showIem(true);
+  document.getElementById("stamp").textContent = "IEM current";
+  document.getElementById("frameidx").textContent = "live";
+  var s = document.getElementById("scrub"); if (s) s.value = s.max;
+}
+
 function showFrame(i) {
   if (!frameLayers.length) return;
+  usingFrames = true;
+  showIem(false);                 // hide IEM while the animation frame is up
   curFrame = (i + frameLayers.length) % frameLayers.length;
   var op = radarOpacity();
   for (var k = 0; k < frameLayers.length; k++) {
@@ -183,6 +216,7 @@ function tick() {
 function play() {
   if (!frameLayers.length) return;
   playing = true;
+  showFrame(curFrame);           // switch from IEM-live to the animation frames
   document.getElementById("pp").innerHTML = "&#10073;&#10073; PAUSE";
   clearInterval(timer);
   timer = setInterval(tick, parseInt(document.getElementById("speed").value, 10));
@@ -206,10 +240,9 @@ function applyProduct() {
     clearSat();
     setPlaybar(true);
     note.textContent = opt.text.replace(/&deg;/g,"°") +
-      " — animated ~2 h loop (RainViewer, ~2 km mosaic). Zoom in and it auto-switches to the " +
-      "crisp IEM true-dBZ current scan; zoom back out for the loop.";
+      " — shows the crisp IEM current scan (reliable at every zoom). Press PLAY for the last " +
+      "~2 h RainViewer loop; ◉ LIVE returns to the current scan.";
     loadRainViewer();
-    syncIem();
   } else if (src === "sat") {
     clearFrames();
     setPlaybar(false);
@@ -235,7 +268,7 @@ function applyProduct() {
   syncIem();   // hide auto-IEM for non-reflectivity products (unless manually forced on)
 }
 function setPlaybar(on) {
-  ["pp","step-b","step-f","scrub"].forEach(function (id) {
+  ["live","pp","step-b","step-f","scrub"].forEach(function (id) {
     document.getElementById(id).disabled = !on;
   });
 }
@@ -303,6 +336,46 @@ function showSiteInfo() {
 function centerOnSite() {
   var s = currentSite();
   if (s) map.setView([s.lat, s.lon], Math.max(map.getZoom(), 8));
+}
+
+/* ---- radar site icons (click for that radar's dedicated view) ---- */
+var siteLayer = L.layerGroup([], { pane:"sites" });
+function buildSiteMarkers() {
+  siteLayer.clearLayers();
+  sites.forEach(function (s) {
+    if (s.lat == null) return;
+    var m = L.marker([s.lat, s.lon], { pane:"sites", icon: L.divIcon({
+      className: "siteicon " + (s.net === "TDWR" ? "tdwr" : "nexrad"),
+      iconSize: [7, 7], iconAnchor: [3.5, 3.5], html: '<span class="sdot"></span>' }) });
+    m.bindTooltip(s.id + " — " + s.name, { direction: "top", offset: [0, -5] });
+    m.on("click", function () { openSitePopup(s); });
+    siteLayer.addLayer(m);
+  });
+  if (document.getElementById("c-sites").checked && !map.hasLayer(siteLayer)) siteLayer.addTo(map);
+}
+function openSitePopup(s) {
+  var html = '<div class="sitepop"><b>' + s.id + '</b> &middot; ' + s.net + '<br>' + s.name + '<br>' +
+    s.lat.toFixed(3) + '&deg;, ' + s.lon.toFixed(3) + '&deg;<br>' +
+    '<button class="sp-go">Open this radar</button>' +
+    (s.net === "WSR-88D" ? '<button class="sp-3d">3D volume</button>' : '') + '</div>';
+  L.popup({ offset: [0, -4] }).setLatLng([s.lat, s.lon]).setContent(html).openOn(map);
+  setTimeout(function () {
+    var el = document.querySelector(".sitepop"); if (!el) return;
+    el.querySelector(".sp-go").onclick = function () { map.closePopup(); selectSite(s); };
+    var b3 = el.querySelector(".sp-3d");
+    if (b3) b3.onclick = function () { map.closePopup(); Volume3D.open(Level3.site3(s.id), s.id + " — " + s.name, "refl"); };
+  }, 0);
+}
+function selectSite(s) {
+  var sel = document.getElementById("site");
+  if (![].some.call(sel.options, function (o) { return o.value === s.id; })) {
+    document.getElementById("network").value = "ALL";
+    document.getElementById("findsite").value = "";
+    populateSites();
+  }
+  sel.value = s.id;
+  showSiteInfo();
+  map.setView([s.lat, s.lon], Math.max(map.getZoom(), 9));   // zoom in so its radar detail shows
 }
 
 /* =================== WARNINGS -> STORM TABLE =================== */
@@ -687,6 +760,7 @@ document.getElementById("frames").addEventListener("change", function () {
 });
 document.getElementById("speed").addEventListener("change", function () { if (playing) play(); });
 
+document.getElementById("live").addEventListener("click", function () { pause(); goLive(); });
 document.getElementById("pp").addEventListener("click", function () { playing ? pause() : play(); });
 document.getElementById("step-f").addEventListener("click", function () { pause(); showFrame(curFrame + 1); });
 document.getElementById("step-b").addEventListener("click", function () { pause(); showFrame(curFrame - 1); });
@@ -695,7 +769,7 @@ document.getElementById("scrub").addEventListener("input", function () { pause()
 document.getElementById("opacity").addEventListener("input", function () {
   if (iemLayer) iemLayer.setOpacity(radarOpacity());
   if (satLayer) satLayer.setOpacity(radarOpacity());
-  if (frameLayers.length) showFrame(curFrame);
+  if (usingFrames && frameLayers.length) showFrame(curFrame);
 });
 
 function toggleLayer(cb, layer) {
@@ -718,6 +792,9 @@ document.getElementById("c-tracks").addEventListener("change", function () {
 });
 document.getElementById("c-iem").addEventListener("change", syncIem);
 map.on("zoomend", syncIem);
+document.getElementById("c-sites").addEventListener("change", function () {
+  if (this.checked) siteLayer.addTo(map); else map.removeLayer(siteLayer);
+});
 
 /* storm panel tabs: table <-> raw Level III text */
 function showTab(text) {
@@ -746,7 +823,7 @@ map.on("moveend", function () {
 buildLegend();
 startClock();
 setStatus("Loading radar sites…");
-loadStations().then(centerOnSite);
+loadStations().then(function () { buildSiteMarkers(); centerOnSite(); });
 applyProduct();     // default product = base reflectivity (IEM) live
 loadWarnings();
 

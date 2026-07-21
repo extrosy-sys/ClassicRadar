@@ -150,7 +150,112 @@ window.Volume3D = (function () {
       .catch(function (e) { setStatus("3D load failed: " + e.message); });
   }
 
+  var surfaceMeshes = [];
+  function clearSurfaces() {
+    surfaceMeshes.forEach(function (m) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); });
+    surfaceMeshes = [];
+  }
+  function clearCloud() { if (cloud) { scene.remove(cloud); cloud.geometry.dispose(); cloud.material.dispose(); cloud = null; } }
+
+  /* dispatch: solid isosurfaces (marching cubes) for reflectivity, else point/blob cloud */
   function rebuild() {
+    if (document.getElementById("v3-mode").value === "surface" && product === "refl") buildSurfaces();
+    else buildPoints();
+  }
+
+  /* grid the radar volume onto a Cartesian field, then Marching-Cubes nested isosurfaces */
+  function buildSurfaces() {
+    clearCloud();
+    var ts = activeTilts();
+    if (!ts || !ts.length) { clearSurfaces(); return; }
+    ts.forEach(function (t) { if (!t.grid) buildGrid(t); });
+    var p = PRODUCTS[product];
+    var thr = parseFloat(document.getElementById("v3-thresh").value);
+    var vex = parseFloat(document.getElementById("v3-vex").value);
+    var opF = parseInt(document.getElementById("v3-op").value, 10) / 55;
+
+    var R = MAX_RANGE_KM, NE = 104, NN = 104, NH = 28, ZTOP = 16, FLOOR = -32;
+    var dE = 2*R/NE, dN = 2*R/NN, dH = ZTOP/NH, Re = 8494, NEN = NE*NN;
+    var sorted = ts.slice().sort(function (a, b) { return a.elevation - b.elevation; });
+    var tanE = sorted.map(function (t) { return Math.tan(t.elevation*Math.PI/180); });
+    var cosE = sorted.map(function (t) { return Math.cos(t.elevation*Math.PI/180); });
+    var field = new Float32Array(NE*NN*NH);
+
+    function sampleTilt(ti, azKey, gr) {
+      var t = sorted[ti], g = Math.floor((gr/cosE[ti]) / t.gateKm);
+      var lv = t.grid[azKey];
+      if (!lv || g < 0 || g >= lv.length) return NaN;
+      var v = lv[g];
+      return v >= 2 ? p.value(v) : FLOOR;
+    }
+    for (var ie = 0; ie < NE; ie++) {
+      var east = -R + (ie + 0.5) * dE;
+      for (var jn = 0; jn < NN; jn++) {
+        var north = -R + (jn + 0.5) * dN;
+        var gr = Math.sqrt(east*east + north*north);
+        var base = ie + jn*NE;
+        if (gr < 2 || gr > R) { for (var kh = 0; kh < NH; kh++) field[base + kh*NEN] = NaN; continue; }
+        var azKey = Math.round((((Math.atan2(east, north)*180/Math.PI) % 360) + 360) % 360 * 2);
+        var nT = sorted.length, bh = new Array(nT), dv = new Array(nT);
+        for (var ti = 0; ti < nT; ti++) {
+          bh[ti] = gr*tanE[ti] + gr*gr/(2*Re);
+          var s = sampleTilt(ti, azKey, gr); dv[ti] = (s !== s) ? FLOOR : s;
+        }
+        for (var kh2 = 0; kh2 < NH; kh2++) {
+          var h = (kh2 + 0.5) * dH, val;
+          if (h <= bh[0]) val = dv[0];                       // extend lowest tilt down to the ground
+          else if (h >= bh[nT-1]) val = FLOOR;               // above the highest beam = echo top
+          else {
+            val = FLOOR;
+            for (var b = 0; b < nT - 1; b++) if (h >= bh[b] && h <= bh[b+1]) {
+              var f = (h - bh[b]) / (bh[b+1] - bh[b]); val = dv[b] + (dv[b+1] - dv[b]) * f; break;
+            }
+          }
+          field[base + kh2*NEN] = val;
+        }
+      }
+    }
+
+    function map(gx, gy, gz) {
+      return [ -R + (gx + 0.5) * dE, ((gz + 0.5) * dH) * vex, -R + (gy + 0.5) * dN ];
+    }
+    // adaptive nested levels: spread from the threshold up to (near) the field's actual peak,
+    // so the innermost shell always lands on the storm core (red/magenta) whatever its strength.
+    var fmax = FLOOR;
+    for (var fi = 0; fi < field.length; fi++) { var fv = field[fi]; if (fv === fv && fv > fmax) fmax = fv; }
+    var lo = thr, hi = Math.max(thr + 10, fmax - 2);
+    var levels = [0, 0.4, 0.7, 0.92].map(function (f) { return lo + (hi - lo) * f; });
+
+    clearSurfaces();
+    var ops = [0.12, 0.26, 0.52, 0.97], verts = 0;
+    levels.forEach(function (lvl, i) {
+      var pos = [];
+      MarchingCubes.build(field, NE, NN, NH, lvl, map, pos);
+      if (!pos.length) return;
+      verts += pos.length / 3;
+      var geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      geo.computeVertexNormals();
+      var c = p.color(lvl), op = Math.min(1, ops[i] * opF);
+      var mat = new THREE.MeshLambertMaterial({ color: new THREE.Color(c[0], c[1], c[2]),
+        transparent: op < 0.95, opacity: op, side: THREE.DoubleSide, depthWrite: op >= 0.9 });
+      var mesh = new THREE.Mesh(geo, mat);
+      mesh.renderOrder = levels.length - i;
+      mesh.userData.baseOp = ops[i];
+      surfaceMeshes.push(mesh); scene.add(mesh);
+    });
+    document.getElementById("v3-count").textContent = (verts | 0).toLocaleString() + " verts · peak " + fmax.toFixed(0) + " dBZ";
+  }
+  function setSurfaceOpacity() {
+    var opF = parseInt(document.getElementById("v3-op").value, 10) / 55;
+    surfaceMeshes.forEach(function (m) {
+      var op = Math.min(1, m.userData.baseOp * opF);
+      m.material.opacity = op; m.material.transparent = op < 0.95; m.material.depthWrite = op >= 0.9;
+    });
+  }
+
+  function buildPoints() {
+    clearSurfaces();
     var ts = activeTilts();
     if (!ts || !ts.length) return;
     ts.forEach(function (t) { if (!t.grid) buildGrid(t); });
@@ -257,7 +362,7 @@ window.Volume3D = (function () {
         '<label>Product <select id="v3-prod"><option value="refl">Reflectivity (dBZ)</option>' +
           '<option value="vel">Velocity (m/s)</option></select></label>' +
         '<label>Mode <select id="v3-mode"><option value="point">Points</option>' +
-          '<option value="blob">Blobs</option></select></label>' +
+          '<option value="blob">Blobs</option><option value="surface">Surfaces</option></select></label>' +
         '<span id="v3-status"></span><span class="v3-sp"></span>' +
         '<label><span id="v3-thlab">dBZ≥</span> <input type="range" id="v3-thresh" min="5" max="65" value="20"></label>' +
         '<label>Opac <input type="range" id="v3-op" min="8" max="100" value="55"></label>' +
@@ -280,6 +385,9 @@ window.Volume3D = (function () {
     host.appendChild(renderer.domElement);
     controls = new THREE.OrbitControls(camera, renderer.domElement); controls.enableDamping = true;
 
+    scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+    var dl = new THREE.DirectionalLight(0xffffff, 0.7); dl.position.set(0.4, 1, 0.3); scene.add(dl);
+    var dl2 = new THREE.DirectionalLight(0xbcd0ff, 0.35); dl2.position.set(-0.5, 0.4, -0.6); scene.add(dl2);
     scene.add(new THREE.GridHelper(320, 16, 0x2b4468, 0x14202f));
     var site = new THREE.Mesh(new THREE.SphereGeometry(2, 12, 12), new THREE.MeshBasicMaterial({ color:0xffd23f }));
     scene.add(site);
@@ -287,9 +395,13 @@ window.Volume3D = (function () {
     document.getElementById("v3-close").onclick = close;
     document.getElementById("v3-thresh").oninput = rebuild;
     document.getElementById("v3-vex").oninput = rebuild;
-    document.getElementById("v3-op").oninput = updateMaterial;      // live, no geometry rebuild
-    document.getElementById("v3-size").oninput = updateMaterial;
-    document.getElementById("v3-mode").onchange = updateMaterial;
+    function applyStyle() {
+      if (document.getElementById("v3-mode").value === "surface" && product === "refl") setSurfaceOpacity();
+      else updateMaterial();
+    }
+    document.getElementById("v3-op").oninput = applyStyle;          // live, no geometry rebuild
+    document.getElementById("v3-size").oninput = applyStyle;
+    document.getElementById("v3-mode").onchange = rebuild;          // switching in/out of surfaces rebuilds
     document.getElementById("v3-fill").onchange = rebuild;
     document.getElementById("v3-frames").onchange = function () {
       var k = parseInt(this.value, 10);

@@ -115,7 +115,8 @@
         <div class="checkline"><input type="checkbox" id="c-warn" checked><label for="c-warn">NWS warning polygons</label></div>
         <div class="checkline"><input type="checkbox" id="c-cells" checked><label for="c-cells">Storm-cell markers</label></div>
         <div class="checkline"><input type="checkbox" id="c-tracks" checked><label for="c-tracks">Level III forecast tracks</label></div>
-        <div class="checkline"><input type="checkbox" id="c-iem"><label for="c-iem">IEM true-dBZ (crisp, current still)</label></div>
+        <div class="checkline"><input type="checkbox" id="c-sites" checked><label for="c-sites">Radar site icons</label></div>
+        <div class="checkline"><input type="checkbox" id="c-iem"><label for="c-iem">Force IEM true-dBZ still</label></div>
         <div class="row" style="margin-top:6px">
           <label>Radar opacity</label>
           <input type="range" id="opacity" min="20" max="100" value="80" class="full">
@@ -155,9 +156,12 @@
         <div class="lgrid" id="legend-grid"></div>
         <div class="lscale"><span>5</span><span>25</span><span>45</span><span>65</span><span>75</span></div>
       </div>
+
+      <div id="tilestatus" style="display:none"></div>
     </div>
 
     <div id="playbar">
+      <button id="live">&#9673; LIVE</button>
       <button id="pp">&#9654; PLAY</button>
       <button id="step-b">&#9668;</button>
       <button id="step-f">&#9658;</button>
@@ -191,6 +195,7 @@
 <script src="sites.js"></script>
 <script src="bzip2.js"></script>
 <script src="level3.js"></script>
+<script src="marchingcubes.js"></script>
 <script src="volume3d.js"></script>
 <script src="app.js"></script>
 </body>

@@ -66,16 +66,33 @@ Y-up with a vertical-exaggeration slider. Range capped 160 km, gate stride 2.
   per tilt code), builds a grid-indexed tilt set per frame, and the ▶ button loops them (rebuild per
   frame at 700 ms), interpolation and all.
 
+## 3D Surfaces mode (marching cubes isosurfaces)
+Mode = **Surfaces** (reflectivity) turns the point cloud into solid, homogeneous 3D shells like the
+NOAA/GR2Analyst renders. `marchingcubes.js` = classic Lorensen-Cline marching cubes (canonical
+edge/tri tables, base64-packed; validated against a synthetic sphere → verts exactly on radius).
+`buildSurfaces()` grids the radar volume onto a Cartesian field (voxel-driven: per voxel compute
+ground range + azimuth, sample each tilt's gate, vertically interpolate dBZ between the tilts' beam
+heights `g·tanε + g²/2Rₑ`; lowest tilt extended to ground, above the top beam = echo-top), then runs
+marching cubes at **4 adaptive nested levels** (threshold → ~storm peak) → MeshLambert meshes,
+outer shells translucent, red core opaque, lit by ambient+2 directional lights. Opacity slider is
+live (`setSurfaceOpacity`); threshold/Fill/V× rebuild. Grid 104×104×28 over ±160 km × 16 km.
+NOTE: uses ONE radar's tilts today; the gridder is structured to max-combine multiple radars for
+higher resolution (fetch nearby radars' tilts, take max dBZ per voxel) — that's the next step.
+
 ## Satellite & 2D reliability
 - **Satellite** (NASA GIBS / GOES-East, keyless, full-disk): products "Infrared (cloud tops)" =
   `GOES-East_ABI_Band13_Clean_Infrared` (Level6) and "GeoColor (visible)" = `GOES-East_ABI_GeoColor`
   (Level7). GIBS WMTS REST is `{z}/{y}/{x}` (row/col) — matches Leaflet's `{z}/{y}/{x}`. `time=default`
   gives the latest scan. Static (playbar disabled).
-- **Tile retry** (`attachRetry`): radar/IEM/satellite layers re-request a tile on `tileerror` (up to
-  2×, cache-busted). RainViewer radar clamped to `maxNativeZoom:7` (its mosaic max); IEM to 12.
-- **Auto-IEM on zoom** (`syncIem`): RainViewer's ~2 km mosaic turns to blocks when zoomed in, so at
-  zoom ≥ 9 (reflectivity products) the crisp IEM layer auto-shows on top; zoom back out for the loop.
-  The `c-iem` checkbox forces IEM on at any zoom.
+- **IEM is the reliable default at EVERY zoom** (`goLive`/`syncIem`): RainViewer's free tile server is
+  flaky (intermittent misses, ~2 km mosaic that blocks up when zoomed), so the map shows the crisp
+  IEM current scan by default. **PLAY** switches to the RainViewer loop (`showFrame` sets `usingFrames`,
+  hides IEM); **◉ LIVE** returns to IEM. This fixes "radar disappears when zoomed out / tiles come and
+  go". RainViewer clamped `maxNativeZoom:7`, IEM `maxNativeZoom:12`.
+- **Tile status** (`#tilestatus`, `attachRetry(layer,name)`): shows "loading tiles…" and, after 2
+  cache-busted retries, "N tile(s) failed" (red) — surfaces the flakiness instead of silent holes.
+- **Radar site icons** (`buildSiteMarkers`, `c-sites`): all 204 NEXRAD/TDWR sites as small dots; click →
+  popup with "Open this radar" (selects + zooms) and "3D volume" (opens the volumetric view for it).
 
 ## Storm tracks — multi-radar + declutter
 `loadStormData` fetches NST from EVERY WSR-88D whose site is in view (nearest `MAX_L3_SITES`=5,
