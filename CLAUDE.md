@@ -154,6 +154,15 @@ tab; clicking a card highlights that alert on the `alertSelLayer` (warn pane, bo
 `selectedAlertUid` + `reapplyAlertSelection` keep the highlight/open-card across data refreshes (matched by
 stable alert id). `esc()` HTML-escapes all alert text. Verified live near KJKL: 21 in-view alerts, full
 921-char description + instructions, severity sort, both link directions, 29 area polygons. Web-only so far.
+- **Overlapping-alert picker**: because alert areas stack, clicking one runs `onAlertAreaClick` → a
+  ray-casting point-in-polygon (`geomContains`/`alertsAtPoint`) finds EVERY alert whose area covers the
+  clicked point. 1 hit → select it directly; ≥2 → a Leaflet popup (`openAlertPicker`) lists them (severity
+  chip + event). **Hovering a picker row** draws that alert's area bold on `alertHoverLayer` (`hoverAlert`,
+  white halo + colored stroke, cleared on mouseout / `popupclose`); clicking a row selects it (card + fly +
+  highlight) and closes the popup. Wired to BOTH the alert-area polygons (`drawAlertPolys`) and the
+  default-visible storm-warning polygons (`renderStorm`), so overlapping warnings disambiguate even with the
+  "All weather-alert areas" toggle off. Verified live: a Tornado Warning + Flood Advisory overlap → 2-item
+  picker, each row highlights its own area on hover, click opens the card.
 
 ## Satellite & 2D reliability
 - **Satellite** (NASA GIBS / GOES-East, keyless, full-disk): products "Infrared (cloud tops)" =

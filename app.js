@@ -634,6 +634,7 @@ var warnLayer = L.layerGroup([], { pane:"warn" }).addTo(map);
 var trackLayer = L.layerGroup([], { pane:"track" }).addTo(map);
 var alertLayer = L.layerGroup([], { pane:"alerts" }).addTo(map);      // all in-view alert areas (toggle)
 var alertSelLayer = L.layerGroup([], { pane:"warn" }).addTo(map);     // the selected alert, highlighted
+var alertHoverLayer = L.layerGroup([], { pane:"warn" }).addTo(map);   // picker hover preview
 var lastL3 = null;
 
 function haversine(a, b, c, d) {
@@ -773,6 +774,7 @@ function renderStorm(features, l3List) {
       var poly = L.geoJSON(f.geometry, { pane:"warn",
         style:{ color:color, weight:2.5, fill:true, fillColor:color, fillOpacity:0.15, dashArray:"6 4" } })
         .addTo(warnLayer);
+      poly.on("click", onAlertAreaClick);      // overlapping warnings -> picker list (from the alerts feed)
       target._poly = poly; target._color = color;
     }
   });
@@ -1083,7 +1085,7 @@ function drawAlertPolys() {
     var col = alertColor(a.severity);
     var poly = L.geoJSON(a.geom, { pane:"alerts",
       style:{ color:col, weight:1.5, fill:true, fillColor:col, fillOpacity:0.10, dashArray:"4 4" } }).addTo(alertLayer);
-    poly.on("click", function () { selectAlert(i, true); });
+    poly.on("click", onAlertAreaClick);          // overlap-aware: may open a picker list
     alertRefs[i] = { poly: poly, center: a.center };
   });
 }
@@ -1140,6 +1142,75 @@ function selectAlert(i, fromMap) {
   if (isMobile() && fromMap) document.getElementById("mapwrap").scrollIntoView({ behavior:"smooth", block:"start" });
 }
 
+/* ---- point-in-polygon hit test so overlapping alert areas can be disambiguated ---- */
+function pointInRing(x, y, ring) {
+  var inside = false;
+  for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    var xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+function ringsContain(rings, x, y) {
+  if (!rings.length || !pointInRing(x, y, rings[0])) return false;   // must be inside outer ring
+  for (var h = 1; h < rings.length; h++) if (pointInRing(x, y, rings[h])) return false;  // and outside holes
+  return true;
+}
+function geomContains(geom, lat, lon) {
+  if (!geom) return false;
+  if (geom.type === "Polygon") return ringsContain(geom.coordinates, lon, lat);
+  if (geom.type === "MultiPolygon") return geom.coordinates.some(function (poly) { return ringsContain(poly, lon, lat); });
+  return false;
+}
+/* indices of every in-view alert whose area covers the clicked point (severity-sorted already) */
+function alertsAtPoint(lat, lon) {
+  var hits = [];
+  alertsData.forEach(function (a, i) { if (geomContains(a.geom, lat, lon)) hits.push(i); });
+  return hits;
+}
+
+/* click on an alert / warning area -> select it, or (if areas overlap) offer a picker list */
+function onAlertAreaClick(e) {
+  var hits = alertsAtPoint(e.latlng.lat, e.latlng.lng);
+  if (!hits.length) return;
+  if (hits.length === 1) { selectAlert(hits[0], true); return; }
+  openAlertPicker(e.latlng, hits);
+}
+
+function openAlertPicker(latlng, hits) {
+  var html = '<div class="apick"><div class="apickhd">' + hits.length + ' overlapping alerts here</div>';
+  hits.forEach(function (i) {
+    var a = alertsData[i];
+    html += '<div class="apickitem" data-ai="' + i + '">' +
+      '<span class="asev" style="background:' + alertColor(a.severity) + '">' + esc(a.severity) + '</span>' +
+      '<span class="apn">' + esc(a.event) + '</span></div>';
+  });
+  html += '</div>';
+  L.popup({ className:"alertpicker", offset:[0,-2], maxWidth:300, autoPan:true })
+    .setLatLng(latlng).setContent(html).openOn(map);
+  setTimeout(function () {
+    var box = document.querySelector(".alertpicker .apick"); if (!box) return;
+    box.querySelectorAll(".apickitem").forEach(function (it) {
+      var i = parseInt(it.getAttribute("data-ai"), 10);
+      it.addEventListener("mouseover", function () { it.classList.add("hi"); hoverAlert(i, true); });
+      it.addEventListener("mouseout",  function () { it.classList.remove("hi"); hoverAlert(i, false); });
+      it.addEventListener("click", function () { hoverAlert(i, false); map.closePopup(); selectAlert(i, true); });
+    });
+  }, 0);
+}
+
+/* transient bold outline of one alert while its picker row is hovered */
+function hoverAlert(i, on) {
+  alertHoverLayer.clearLayers();
+  if (!on) return;
+  var a = alertsData[i]; if (!a || !a.geom) return;
+  var col = alertColor(a.severity);
+  L.geoJSON(a.geom, { pane:"warn", interactive:false,
+    style:{ color:"#fff", weight:5, fill:true, fillColor:col, fillOpacity:0.35 } }).addTo(alertHoverLayer);
+  L.geoJSON(a.geom, { pane:"warn", interactive:false,
+    style:{ color:col, weight:2.5, fill:false } }).addTo(alertHoverLayer);
+}
+
 /* keep the highlight + open card after a data refresh, matching by stable alert id */
 function reapplyAlertSelection() {
   if (selectedAlertUid == null) return;
@@ -1178,6 +1249,7 @@ map.on("moveend", function () {
   clearTimeout(moveTimer);
   moveTimer = setTimeout(loadWarnings, 500);   // refresh in-view cells after panning
 });
+map.on("popupclose", function () { alertHoverLayer.clearLayers(); });   // drop any picker hover preview
 
 /* ============================= BOOT ============================= */
 buildLegend();
