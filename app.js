@@ -57,7 +57,8 @@ layers.city.addTo(map);
 /* ============================= RADAR ============================= */
 var IEM_URL = "https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png";
 var iemLayer = null;          // live still (IEM base reflectivity)
-var frameLayer = null;        // ONE RainViewer layer; its URL swaps per frame (see loadRainViewer)
+var buffers = [];             // two RainViewer layers, double-buffered (swap by opacity, no strobe)
+var frontBuf = 0;             // which buffer is currently visible
 var frameUrls = [];           // per-frame tile-URL templates
 var frameTimes = [];          // unix seconds per frame
 var curFrame = 0;
@@ -117,7 +118,8 @@ function showSat(kind) {
 }
 
 function clearFrames() {
-  if (frameLayer) { map.removeLayer(frameLayer); frameLayer = null; }
+  buffers.forEach(function (l) { map.removeLayer(l); });
+  buffers = []; frontBuf = 0;
   frameUrls = []; frameTimes = [];
 }
 
@@ -165,11 +167,16 @@ function loadRainViewer() {
         frameTimes.push(f.time);
       });
       if (frameUrls.length) {
-        // ONE layer whose URL swaps per frame -> only the current frame's tiles load at once.
-        // (12 preloaded layers = ~600 simultaneous requests, which RainViewer rate-limits into
-        //  dropped tiles.) RainViewer's mosaic is native z7; clamp so Leaflet upscales beyond.
-        frameLayer = attachRetry(L.tileLayer(frameUrls[frameUrls.length - 1], { pane:"radar", opacity:0,
-          maxZoom:18, maxNativeZoom:7, noWrap:true, attribution:"Radar &copy; RainViewer" }), "RainViewer loop").addTo(map);
+        // TWO layers, double-buffered: the next frame preloads on the hidden buffer, then we
+        // swap by opacity -> instant, no clearing/strobe. Only ~2 frames load at once (vs 12),
+        // so RainViewer isn't rate-limited into dropped tiles. Native z7 -> clamp + upscale.
+        var lastUrl = frameUrls[frameUrls.length - 1];
+        for (var bi = 0; bi < 2; bi++) {
+          var lyr = attachRetry(L.tileLayer(lastUrl, { pane:"radar", opacity:0, maxZoom:18,
+            maxNativeZoom:7, noWrap:true, attribution:"Radar &copy; RainViewer" }), "RainViewer loop").addTo(map);
+          lyr._crFrame = frameUrls.length - 1;
+          buffers.push(lyr);
+        }
       }
       curFrame = frameUrls.length - 1;
       wireScrub();
@@ -183,7 +190,7 @@ var usingFrames = false;   // true while showing the RainViewer loop; false = re
 /* return to the reliable IEM current scan (shown at every zoom) */
 function goLive() {
   usingFrames = false;
-  if (frameLayer) frameLayer.setOpacity(0);
+  buffers.forEach(function (l) { l.setOpacity(0); });
   if (currentProductSrc() === "rv") showIem(true);
   document.getElementById("stamp").textContent = "IEM current";
   document.getElementById("frameidx").textContent = "live";
@@ -191,16 +198,27 @@ function goLive() {
 }
 
 function showFrame(i) {
-  if (!frameUrls.length || !frameLayer) return;
+  if (!frameUrls.length || buffers.length < 2) return;
   usingFrames = true;
   showIem(false);                 // hide IEM while the animation frame is up
-  curFrame = (i + frameUrls.length) % frameUrls.length;
-  frameLayer.setUrl(frameUrls[curFrame]);   // swap this one layer's URL -> loads just this frame
-  frameLayer.setOpacity(radarOpacity());
+  var n = frameUrls.length;
+  curFrame = (i + n) % n;
+  var front = buffers[frontBuf], back = buffers[1 - frontBuf];
+  if (front._crFrame === curFrame) {
+    front.setOpacity(radarOpacity());            // already the visible frame
+  } else {
+    if (back._crFrame !== curFrame) { back.setUrl(frameUrls[curFrame]); back._crFrame = curFrame; }
+    back.setOpacity(radarOpacity());             // reveal the (pre)loaded buffer, then hide the old
+    front.setOpacity(0);
+    frontBuf = 1 - frontBuf;
+  }
   var t = new Date(frameTimes[curFrame] * 1000);
   document.getElementById("stamp").textContent = fmtStamp(t);
   document.getElementById("scrub").value = curFrame;
-  document.getElementById("frameidx").textContent = (curFrame + 1) + "/" + frameUrls.length;
+  document.getElementById("frameidx").textContent = (curFrame + 1) + "/" + n;
+  // preload the NEXT frame onto the now-hidden buffer so the next tick swaps instantly
+  var nb = buffers[1 - frontBuf], nf = (curFrame + 1) % n;
+  if (nb._crFrame !== nf) { nb.setUrl(frameUrls[nf]); nb._crFrame = nf; }
 }
 function wireScrub() {
   var s = document.getElementById("scrub");
@@ -771,7 +789,7 @@ document.getElementById("scrub").addEventListener("input", function () { pause()
 document.getElementById("opacity").addEventListener("input", function () {
   if (iemLayer) iemLayer.setOpacity(radarOpacity());
   if (satLayer) satLayer.setOpacity(radarOpacity());
-  if (usingFrames && frameLayer) frameLayer.setOpacity(radarOpacity());
+  if (usingFrames && buffers.length) buffers[frontBuf].setOpacity(radarOpacity());
 });
 
 function toggleLayer(cb, layer) {
