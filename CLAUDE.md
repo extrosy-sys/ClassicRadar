@@ -184,6 +184,15 @@ stable alert id). `esc()` HTML-escapes all alert text. Verified live near KJKL: 
   the card header + a line in the detail). Verified live at KJKL: 43 callouts (▲48kft…), 43 table rows with
   tops, alert cards showing Tornado-Warning tops of 51-52 kft.
 
+## Base vs Composite reflectivity (real products, not a color swap)
+Base and Composite were BOTH RainViewer/IEM before, so the LIVE view showed identical IEM n0q tiles →
+toggling did nothing (fixed 2026-07-21). Now the reflectivity "still" is product-aware (`showIem` +
+`isComposite`): **Base Reflectivity 0.5°** = IEM `nexrad-n0q` (0.5° base), **Composite Reflectivity** =
+NCEP MRMS composite reflectivity WMS (`opengeo.ncep.noaa.gov/geoserver/conus/conus_cref_qcd`, keyless,
+CORS-open, EPSG:3857, column-max). `showIem` keeps a single active still and swaps type on product change
+(verified both directions). The PLAY loop is still RainViewer for both (only free animated national radar);
+`c-iem` forces the still on. Opacity slider drives both stills.
+
 ## Satellite & 2D reliability
 - **Satellite** (NASA GIBS / GOES-East, keyless, full-disk): products "Infrared (cloud tops)" =
   `GOES-East_ABI_Band13_Clean_Infrared` (Level6) and "GeoColor (visible)" = `GOES-East_ABI_GeoColor`

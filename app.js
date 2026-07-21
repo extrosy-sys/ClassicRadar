@@ -66,7 +66,9 @@ layers.city.addTo(map);
 
 /* ============================= RADAR ============================= */
 var IEM_URL = "https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png";
-var iemLayer = null;          // live still (IEM base reflectivity)
+var MRMS_CREF_URL = "https://opengeo.ncep.noaa.gov/geoserver/conus/conus_cref_qcd/ows?";  // MRMS composite reflectivity
+var iemLayer = null;          // live still: IEM n0q base reflectivity (base product)
+var compLayer = null;         // live still: NCEP MRMS composite reflectivity (composite product)
 var buffers = [];             // two RainViewer layers, double-buffered (swap by opacity, no strobe)
 var frontBuf = 0;             // which buffer is currently visible
 var frameUrls = [];           // per-frame tile-URL templates
@@ -196,12 +198,25 @@ function syncIem() {
   if (currentProductSrc() !== "rv") { showIem(manual); return; }
   showIem(manual || !usingFrames);      // reliable IEM base whenever not actively looping
 }
+function isComposite() {
+  var p = document.getElementById("product"), o = p.options[p.selectedIndex];
+  return !!o && o.value === "NCR";
+}
+/* Reflectivity "still": IEM n0q base reflectivity for the Base product, NCEP MRMS composite
+   reflectivity for the Composite product — so the two are genuinely different data, not just
+   a color swap. Keeps a single active still; swaps type when the product changes. */
 function showIem(on) {
-  if (on && !iemLayer) {
+  var comp = isComposite();
+  if (compLayer && (!comp || !on)) { map.removeLayer(compLayer); compLayer = null; }
+  if (iemLayer && (comp || !on)) { map.removeLayer(iemLayer); iemLayer = null; }
+  if (!on) return;
+  if (comp && !compLayer) {
+    compLayer = attachRetry(L.tileLayer.wms(MRMS_CREF_URL, { layers:"conus:conus_cref_qcd",
+      format:"image/png", transparent:true, version:"1.1.1", pane:"radar", opacity:radarOpacity(),
+      maxZoom:18, attribution:"Composite reflectivity &copy; NOAA/NCEP MRMS" }), "MRMS composite reflectivity").addTo(map);
+  } else if (!comp && !iemLayer) {
     iemLayer = attachRetry(L.tileLayer(IEM_URL, { pane:"radar", opacity:radarOpacity(), maxZoom:18, maxNativeZoom:12,
       noWrap:true, zIndex:20, attribution:"Base reflectivity &copy; Iowa Environmental Mesonet" }), "IEM base reflectivity").addTo(map);
-  } else if (!on && iemLayer) {
-    map.removeLayer(iemLayer); iemLayer = null;
   }
 }
 
@@ -457,9 +472,10 @@ function applyProduct() {
   if (src === "rv") {
     clearSat();
     setPlaybar(true);
+    var stillName = (opt.value === "NCR") ? "MRMS composite reflectivity (column-max)" : "IEM base reflectivity (0.5° tilt)";
     note.textContent = opt.text.replace(/&deg;/g,"°") +
-      " — shows the crisp IEM current scan (reliable at every zoom). Press PLAY for the last " +
-      "~2 h RainViewer loop; ◉ LIVE returns to the current scan.";
+      " — current " + stillName + " still. Press PLAY for the last ~2 h RainViewer loop; " +
+      "◉ LIVE returns to the current still.";
     loadRainViewer();
   } else if (src === "sat") {
     clearFrames();
@@ -1047,6 +1063,7 @@ document.getElementById("scrub").addEventListener("input", function () { pause()
 
 document.getElementById("opacity").addEventListener("input", function () {
   if (iemLayer) iemLayer.setOpacity(radarOpacity());
+  if (compLayer) compLayer.setOpacity(radarOpacity());
   if (satLayer) satLayer.setOpacity(radarOpacity());
   if (usingFrames && buffers.length) buffers[frontBuf].setOpacity(radarOpacity());
   if (srvOverlay) srvOverlay.setOpacity(radarOpacity());
@@ -1099,7 +1116,9 @@ function esc(s){ return (s == null ? "" : String(s)).replace(/[&<>"]/g, function
 function fmtLocal(d){ try { return d.toLocaleString([], { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" }); } catch(e){ return ""; } }
 
 function fetchAllAlertsCached() {
-  if (alertsCache && Date.now() - alertsCache.t < 60000) return Promise.resolve(alertsCache.features);
+  // active alerts change slowly; cache the ~2 MB national list 3 min so panning re-filters
+  // from memory instead of refetching (re-filtering the parsed features per pan is cheap).
+  if (alertsCache && Date.now() - alertsCache.t < 180000) return Promise.resolve(alertsCache.features);
   return fetch(ALERTS_URL, { headers:{ "Accept":"application/geo+json" } })
     .then(function (r) { return r.ok ? r.json() : { features: [] }; })
     .then(function (j) { var f = j.features || []; alertsCache = { t: Date.now(), features: f }; return f; })
@@ -1402,7 +1421,8 @@ window.addEventListener("beforeunload", function () {
 document.getElementById("refresh").addEventListener("click", function () {
   var src = document.getElementById("product").options[document.getElementById("product").selectedIndex].getAttribute("data-src");
   if (src === "rv") loadRainViewer();
-  if (src === "iem" && iemLayer) { showIem(false); showIem(true); }
+  else if (src === "precip") applyProduct();          // re-request the MRMS layer
+  eetCache = {}; alertsCache = null;                   // force-refresh cached Level III + alerts
   loadWarnings();
 });
 
