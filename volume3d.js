@@ -43,8 +43,9 @@ window.Volume3D = (function () {
   };
 
   var el, renderer, scene, camera, controls, cloud, floor, raf, sprite = null;
-  var tilts = [], product = "refl", site3 = "", label = "";
-  var animFrames = [], animIdx = 0, animPlaying = false, animTimer = null;   // temporal loop
+  var product = "refl", site3 = "", label = "";
+  var radars = [];   // [{ tilts, rx, ry, id }] — primary (rx=ry=0) + overlapping neighbours
+  var animFrames = [], animIdx = 0, animPlaying = false, animTimer = null;   // temporal loop (primary only)
 
   /* index each tilt's radials by 0.5° azimuth bucket so adjacent tilts can be interpolated */
   function buildGrid(t) {
@@ -52,7 +53,29 @@ window.Volume3D = (function () {
     t.radials.forEach(function (r) { t.grid[Math.round(r.az * 2)] = r.levels; });
     return t;
   }
-  function activeTilts() { return animFrames.length ? animFrames[animIdx] : tilts; }
+  /* during a temporal loop we show just the primary radar; otherwise every combined radar */
+  function activeRadars() {
+    if (animFrames.length) return [{ tilts: animFrames[animIdx], rx: 0, ry: 0, id: site3 }];
+    return radars;
+  }
+  function haversineKm(a, b, c, d) {
+    var R = 6371, dl = (c-a)*Math.PI/180, dn = (d-b)*Math.PI/180;
+    var x = Math.sin(dl/2)*Math.sin(dl/2) + Math.cos(a*Math.PI/180)*Math.cos(c*Math.PI/180)*Math.sin(dn/2)*Math.sin(dn/2);
+    return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1-x));
+  }
+  /* east/north km offset of (lat2,lon2) from (lat1,lon1) */
+  function eastNorthKm(lat1, lon1, lat2, lon2) {
+    return [ (lon2-lon1) * Math.cos(lat1*Math.PI/180) * 111.32, (lat2-lat1) * 110.574 ];
+  }
+  /* nearest N other WSR-88D radars within ~260 km (their coverage overlaps the primary's) */
+  function nearbyRadars(pSite3, lat, lon, n) {
+    var all = window.CR_SITES || [];
+    return all.filter(function (s) { return s.net === "WSR-88D" && s.lat != null && Level3.site3(s.id) !== pSite3; })
+      .map(function (s) { return { site3: Level3.site3(s.id), d: haversineKm(lat, lon, s.lat, s.lon) }; })
+      .filter(function (s) { return s.d < 260; })
+      .sort(function (a, b) { return a.d - b.d; })
+      .slice(0, n);
+  }
 
   /* soft radial sprite -> each point becomes a fuzzy transparent "blob" (volumetric cloud) */
   function getSprite() {
@@ -129,25 +152,45 @@ window.Volume3D = (function () {
     load();
   }
 
+  function fetchRadar(s3) {   // -> array of grid-indexed tilts (or [])
+    var p = PRODUCTS[product];
+    return Promise.all(p.codes.map(function (c) { return Level3.fetchTilt(s3, c); }))
+      .then(function (res) { return res.filter(Boolean).map(buildGrid); });
+  }
   function load() {
-    stopAnim(); animFrames = [];
+    stopAnim(); animFrames = []; radars = [];
     var fr = document.getElementById("v3-frames");
     if (fr) { fr.value = "1"; document.getElementById("v3-play").disabled = true; }
     updateFidx();
     var p = PRODUCTS[product];
     setStatus("Fetching " + p.title + " tilts for " + label + " …");
     document.getElementById("v3-title").textContent = "VOLUMETRIC STORM — 3D " + p.title;
-    Promise.all(p.codes.map(function (c) { return Level3.fetchTilt(site3, c); }))
-      .then(function (res) {
-        tilts = res.filter(Boolean).map(buildGrid);
-        if (!tilts.length) { setStatus("No " + p.title + " data available for " + label + "."); if (cloud) { scene.remove(cloud); cloud = null; } return; }
-        setStatus(label + " — tilts " + tilts.map(function (t){return t.elevation.toFixed(1)+"°";}).join(", ") +
-          ". Drag orbit · scroll zoom · right-drag pan.");
-        buildFloor(tilts[0].radarLat, tilts[0].radarLon);
-        rebuild();
-        start();
-      })
-      .catch(function (e) { setStatus("3D load failed: " + e.message); });
+    fetchRadar(site3).then(function (primary) {
+      if (!primary.length) { setStatus("No " + p.title + " data available for " + label + "."); if (cloud) { scene.remove(cloud); cloud = null; } return; }
+      var plat = primary[0].radarLat, plon = primary[0].radarLon;
+      radars = [{ tilts: primary, rx: 0, ry: 0, id: site3 }];
+      buildFloor(plat, plon);
+      rebuild();          // show the primary radar immediately
+      start();
+
+      // then pull the nearest overlapping radars and grid them in (fills the cone of silence
+      // over each radar + far-side low-altitude gaps a single radar can't see)
+      var nbrs = nearbyRadars(site3, plat, plon, 3);
+      if (!nbrs.length) return;
+      setStatus(label + " — adding " + nbrs.length + " overlapping radar(s) to fill gaps…");
+      Promise.all(nbrs.map(function (nb) {
+        return fetchRadar(nb.site3).then(function (ts) {
+          if (ts.length) {
+            var off = eastNorthKm(plat, plon, ts[0].radarLat, ts[0].radarLon);
+            radars.push({ tilts: ts, rx: off[0], ry: off[1], id: nb.site3 });
+          }
+        }).catch(function () {});
+      })).then(function () {
+        setStatus(label + " — " + radars.length + " radars combined (" +
+          radars.map(function (r) { return r.id; }).join(" + ") + "). Overlap fills each radar's cone of silence.");
+        rebuild();        // rebuild the volume with every radar max-combined
+      });
+    }).catch(function (e) { setStatus("3D load failed: " + e.message); });
   }
 
   var surfaceMeshes = [];
@@ -166,9 +209,8 @@ window.Volume3D = (function () {
   /* grid the radar volume onto a Cartesian field, then Marching-Cubes nested isosurfaces */
   function buildSurfaces() {
     clearCloud();
-    var ts = activeTilts();
-    if (!ts || !ts.length) { clearSurfaces(); return; }
-    ts.forEach(function (t) { if (!t.grid) buildGrid(t); });
+    var rads = activeRadars();
+    if (!rads || !rads.length) { clearSurfaces(); return; }
     var p = PRODUCTS[product];
     var thr = parseFloat(document.getElementById("v3-thresh").value);
     var vex = parseFloat(document.getElementById("v3-vex").value);
@@ -176,42 +218,46 @@ window.Volume3D = (function () {
 
     var R = MAX_RANGE_KM, NE = 104, NN = 104, NH = 28, ZTOP = 16, FLOOR = -32;
     var dE = 2*R/NE, dN = 2*R/NN, dH = ZTOP/NH, Re = 8494, NEN = NE*NN;
-    var sorted = ts.slice().sort(function (a, b) { return a.elevation - b.elevation; });
-    var tanE = sorted.map(function (t) { return Math.tan(t.elevation*Math.PI/180); });
-    var cosE = sorted.map(function (t) { return Math.cos(t.elevation*Math.PI/180); });
-    var field = new Float32Array(NE*NN*NH);
+    var field = new Float32Array(NE*NN*NH); field.fill(NaN);   // NaN = no radar sees it
 
-    function sampleTilt(ti, azKey, gr) {
-      var t = sorted[ti], g = Math.floor((gr/cosE[ti]) / t.gateKm);
-      var lv = t.grid[azKey];
-      if (!lv || g < 0 || g >= lv.length) return NaN;
-      var v = lv[g];
-      return v >= 2 ? p.value(v) : FLOOR;
-    }
+    // precompute each radar's sorted tilts + beam trig
+    var per = rads.map(function (r) {
+      r.tilts.forEach(function (t) { if (!t.grid) buildGrid(t); });
+      var st = r.tilts.slice().sort(function (a, b) { return a.elevation - b.elevation; });
+      return { rx: r.rx, ry: r.ry, st: st,
+        tanE: st.map(function (t) { return Math.tan(t.elevation*Math.PI/180); }),
+        cosE: st.map(function (t) { return Math.cos(t.elevation*Math.PI/180); }) };
+    });
+
     for (var ie = 0; ie < NE; ie++) {
       var east = -R + (ie + 0.5) * dE;
       for (var jn = 0; jn < NN; jn++) {
-        var north = -R + (jn + 0.5) * dN;
-        var gr = Math.sqrt(east*east + north*north);
-        var base = ie + jn*NE;
-        if (gr < 2 || gr > R) { for (var kh = 0; kh < NH; kh++) field[base + kh*NEN] = NaN; continue; }
-        var azKey = Math.round((((Math.atan2(east, north)*180/Math.PI) % 360) + 360) % 360 * 2);
-        var nT = sorted.length, bh = new Array(nT), dv = new Array(nT);
-        for (var ti = 0; ti < nT; ti++) {
-          bh[ti] = gr*tanE[ti] + gr*gr/(2*Re);
-          var s = sampleTilt(ti, azKey, gr); dv[ti] = (s !== s) ? FLOOR : s;
-        }
-        for (var kh2 = 0; kh2 < NH; kh2++) {
-          var h = (kh2 + 0.5) * dH, val;
-          if (h <= bh[0]) val = dv[0];                       // extend lowest tilt down to the ground
-          else if (h >= bh[nT-1]) val = FLOOR;               // above the highest beam = echo top
-          else {
-            val = FLOOR;
-            for (var b = 0; b < nT - 1; b++) if (h >= bh[b] && h <= bh[b+1]) {
-              var f = (h - bh[b]) / (bh[b+1] - bh[b]); val = dv[b] + (dv[b+1] - dv[b]) * f; break;
-            }
+        var north = -R + (jn + 0.5) * dN, base = ie + jn*NE;
+        for (var ri = 0; ri < per.length; ri++) {          // each overlapping radar, max-combined
+          var Q = per[ri], e2 = east - Q.rx, n2 = north - Q.ry;
+          var gr = Math.sqrt(e2*e2 + n2*n2);
+          if (gr < 2 || gr > R) continue;                  // this radar can't see this column
+          var azKey = Math.round((((Math.atan2(e2, n2)*180/Math.PI) % 360) + 360) % 360 * 2);
+          var nT = Q.st.length, bh = new Array(nT), dv = new Array(nT);
+          for (var ti = 0; ti < nT; ti++) {
+            bh[ti] = gr*Q.tanE[ti] + gr*gr/(2*Re);
+            var t = Q.st[ti], g = Math.floor((gr/Q.cosE[ti]) / t.gateKm), lv = t.grid[azKey];
+            var s = (lv && g >= 0 && g < lv.length) ? (lv[g] >= 2 ? p.value(lv[g]) : FLOOR) : NaN;
+            dv[ti] = (s !== s) ? FLOOR : s;
           }
-          field[base + kh2*NEN] = val;
+          for (var kh = 0; kh < NH; kh++) {
+            var h = (kh + 0.5) * dH, val;
+            if (h <= bh[0]) val = dv[0];                    // extend lowest tilt to the ground
+            else if (h >= bh[nT-1]) val = FLOOR;            // above the top beam = this radar's blind cone
+            else {
+              val = FLOOR;
+              for (var b = 0; b < nT - 1; b++) if (h >= bh[b] && h <= bh[b+1]) {
+                var f = (h - bh[b]) / (bh[b+1] - bh[b]); val = dv[b] + (dv[b+1] - dv[b]) * f; break;
+              }
+            }
+            var idx = base + kh*NEN, cur = field[idx];
+            if (cur !== cur || val > cur) field[idx] = val;  // max dBZ across radars fills the blind cones
+          }
         }
       }
     }
@@ -256,53 +302,56 @@ window.Volume3D = (function () {
 
   function buildPoints() {
     clearSurfaces();
-    var ts = activeTilts();
-    if (!ts || !ts.length) return;
-    ts.forEach(function (t) { if (!t.grid) buildGrid(t); });
+    var rads = activeRadars();
+    if (!rads || !rads.length) return;
     var p = PRODUCTS[product];
     var thr = parseFloat(document.getElementById("v3-thresh").value);
     var vex = parseFloat(document.getElementById("v3-vex").value);
     var fill = parseInt(document.getElementById("v3-fill").value, 10) || 0;
     var pos = [], col = [];
-    function plot(azDeg, g, gateKm, lv, sinE, cosE) {
+    function plot(rx, ry, azDeg, g, gateKm, lv, sinE, cosE) {
       var val = p.value(lv); if (!p.keep(lv, val, thr)) return;
       var rng = (g + 0.5) * gateKm;
       var h = Math.sqrt(rng*rng + Re*Re + 2*rng*Re*sinE) - Re;
       var s = Re * Math.asin(rng*cosE/(Re+h));
       var a = azDeg*Math.PI/180;
-      pos.push(s*Math.sin(a), h*vex, s*Math.cos(a));
+      pos.push(rx + s*Math.sin(a), h*vex, ry + s*Math.cos(a));   // offset by the radar's own location
       var c = p.color(val); col.push(c[0], c[1], c[2]);
     }
-    // real tilt slices
-    ts.forEach(function (t) {
-      var e = t.elevation*Math.PI/180, sinE = Math.sin(e), cosE = Math.cos(e);
-      var maxG = Math.min(t.nbins, Math.floor(MAX_RANGE_KM / t.gateKm));
-      t.radials.forEach(function (rad) {
-        var n = Math.min(rad.levels.length, maxG);
-        for (var g = 0; g < n; g += 2) { var lv = rad.levels[g]; if (lv >= 2) plot(rad.az, g, t.gateKm, lv, sinE, cosE); }
+    rads.forEach(function (rad) {
+      var ts = rad.tilts;
+      ts.forEach(function (t) { if (!t.grid) buildGrid(t); });
+      // real tilt slices
+      ts.forEach(function (t) {
+        var e = t.elevation*Math.PI/180, sinE = Math.sin(e), cosE = Math.cos(e);
+        var maxG = Math.min(t.nbins, Math.floor(MAX_RANGE_KM / t.gateKm));
+        t.radials.forEach(function (radial) {
+          var n = Math.min(radial.levels.length, maxG);
+          for (var g = 0; g < n; g += 2) { var lv = radial.levels[g]; if (lv >= 2) plot(rad.rx, rad.ry, radial.az, g, t.gateKm, lv, sinE, cosE); }
+        });
       });
-    });
-    // overlapping interpolated slices between adjacent tilts (fills the vertical gaps)
-    if (fill > 0 && ts.length > 1) {
-      var sorted = ts.slice().sort(function (a, b) { return a.elevation - b.elevation; });
-      for (var i = 0; i < sorted.length - 1; i++) {
-        var t0 = sorted[i], t1 = sorted[i+1], gk = t0.gateKm;
-        var maxG = Math.min(t0.nbins, t1.nbins, Math.floor(MAX_RANGE_KM / gk));
-        for (var k = 1; k <= fill; k++) {
-          var frac = k / (fill + 1);
-          var elev = t0.elevation + (t1.elevation - t0.elevation) * frac;
-          var e2 = elev*Math.PI/180, sinE2 = Math.sin(e2), cosE2 = Math.cos(e2);
-          for (var azKey in t0.grid) {
-            var l1 = t1.grid[azKey]; if (!l1) continue;
-            var l0 = t0.grid[azKey], az = azKey / 2;
-            for (var g2 = 0; g2 < maxG; g2 += 3) {
-              var v0 = l0[g2], v1 = l1[g2]; if (v0 < 2 || v1 < 2) continue;
-              plot(az, g2, gk, v0 + (v1 - v0) * frac, sinE2, cosE2);
+      // overlapping interpolated slices between adjacent tilts (fills the vertical gaps)
+      if (fill > 0 && ts.length > 1) {
+        var sorted = ts.slice().sort(function (a, b) { return a.elevation - b.elevation; });
+        for (var i = 0; i < sorted.length - 1; i++) {
+          var t0 = sorted[i], t1 = sorted[i+1], gk = t0.gateKm;
+          var maxG = Math.min(t0.nbins, t1.nbins, Math.floor(MAX_RANGE_KM / gk));
+          for (var k = 1; k <= fill; k++) {
+            var frac = k / (fill + 1);
+            var elev = t0.elevation + (t1.elevation - t0.elevation) * frac;
+            var e2 = elev*Math.PI/180, sinE2 = Math.sin(e2), cosE2 = Math.cos(e2);
+            for (var azKey in t0.grid) {
+              var l1 = t1.grid[azKey]; if (!l1) continue;
+              var l0 = t0.grid[azKey], az = azKey / 2;
+              for (var g2 = 0; g2 < maxG; g2 += 3) {
+                var v0 = l0[g2], v1 = l1[g2]; if (v0 < 2 || v1 < 2) continue;
+                plot(rad.rx, rad.ry, az, g2, gk, v0 + (v1 - v0) * frac, sinE2, cosE2);
+              }
             }
           }
         }
       }
-    }
+    });
     if (cloud) { scene.remove(cloud); cloud.geometry.dispose(); cloud.material.dispose(); }
     var geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));

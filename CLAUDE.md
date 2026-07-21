@@ -77,8 +77,13 @@ heights `g·tanε + g²/2Rₑ`; lowest tilt extended to ground, above the top be
 marching cubes at **4 adaptive nested levels** (threshold → ~storm peak) → MeshLambert meshes,
 outer shells translucent, red core opaque, lit by ambient+2 directional lights. Opacity slider is
 live (`setSurfaceOpacity`); threshold/Fill/V× rebuild. Grid 104×104×28 over ±160 km × 16 km.
-NOTE: uses ONE radar's tilts today; the gridder is structured to max-combine multiple radars for
-higher resolution (fetch nearby radars' tilts, take max dBZ per voxel) — that's the next step.
+- **Multi-radar combine** (`load` fetches primary + `nearbyRadars` 3 nearest WSR-88D within 260 km;
+  `activeRadars`): every radar is gridded onto the same field offset by its east/north km from the
+  primary (`eastNorthKm`), taking **max dBZ per voxel**. This fills the airspace one radar can't see —
+  above all it fills each radar's **cone of silence** (blind directly overhead): verified ILN is blind
+  over itself at 6 km, but neighbour IND (214 km away) samples that point at 4.6 km, so the combine
+  fills it. Points mode also renders every radar (offset by rx/ry). Temporal loop stays primary-only.
+  `window.CR_SITES` (set by app.js) supplies the site list.
 
 ## Satellite & 2D reliability
 - **Satellite** (NASA GIBS / GOES-East, keyless, full-disk): products "Infrared (cloud tops)" =

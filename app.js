@@ -303,6 +303,7 @@ function loadStations() {
 }
 
 function populateSites() {
+  window.CR_SITES = sites;   // expose for the 3D multi-radar gridder (nearby overlapping radars)
   var net = document.getElementById("network").value;
   var q = document.getElementById("findsite").value.trim().toLowerCase();
   var sel = document.getElementById("site");
