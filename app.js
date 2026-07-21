@@ -32,6 +32,13 @@ var map = L.map("map", {
 map.attributionControl.setPrefix(false);
 L.control.zoom({ position: "bottomleft" }).addTo(map);
 
+/* The storm panel (#tablewrap) can pop out into its own browser window; when it does, its
+   DOM lives in that window's document. All panel-scoped lookups go through panelDoc so the
+   render/select code targets whichever document currently holds the panel. */
+var panelDoc = document, panelWin = null, panelHome = null;
+function P(id) { return panelDoc.getElementById(id); }
+function Pq(sel) { return panelDoc.querySelector(sel); }
+
 function pane(name, z) { map.createPane(name); map.getPane(name).style.zIndex = z; }
 pane("radar", 250);
 pane("velocity", 260);
@@ -815,7 +822,7 @@ function renderStorm(features, l3List) {
 
   buildTable(rows);
 
-  var tr = document.getElementById("textreadout");
+  var tr = P("textreadout");
   var texts = l3List.filter(function (e) { return e.result && e.result.rawText && e.result.rawText.trim(); });
   if (texts.length) {
     tr.textContent = texts.map(function (e) {
@@ -834,7 +841,7 @@ function renderStorm(features, l3List) {
 }
 
 function buildTable(rows) {
-  var body = document.getElementById("tablebody");
+  var body = P("tablebody");
   if (!rows.length) {
     body.innerHTML = '<div class="empty">No active severe warnings in the current view. ' +
       'Pan to an area of active weather, or press Reload data. ' +
@@ -872,7 +879,7 @@ function isMobile() { return window.matchMedia("(max-width: 760px)").matches; }
 
 /* transient highlight of a cell's row + marker on hover (either direction) */
 function hoverCell(key, on) {
-  var tr = document.querySelector('tr[data-key="' + key + '"]');
+  var tr = Pq('tr[data-key="' + key + '"]');
   if (tr) tr.classList.toggle("mk-hi", on);
   var ref = cellRefs[key];
   var el = ref && ref.marker && ref.marker.getElement();
@@ -882,7 +889,7 @@ function hoverCell(key, on) {
 /* persistent selection linking one table row <-> one map cell */
 function selectRow(key) {
   selectedId = key;
-  document.querySelectorAll("tr[data-key]").forEach(function (tr) {
+  panelDoc.querySelectorAll("tr[data-key]").forEach(function (tr) {
     tr.classList.toggle("sel", tr.getAttribute("data-key") === key);
   });
   // reset every marker/polygon, then emphasize the chosen one
@@ -901,10 +908,10 @@ function selectRow(key) {
   var r = rowsById[key];
   if (r && r.center) map.flyTo(r.center, Math.max(map.getZoom(), 8), { duration:0.6 });
 
-  var selTr = document.querySelector('tr[data-key="' + key + '"]');
+  var selTr = Pq('tr[data-key="' + key + '"]');
   if (selTr) selTr.scrollIntoView({ block:"nearest" });
   // on a phone the map sits above the table - bring it into view so the ping is seen
-  if (isMobile()) document.getElementById("mapwrap").scrollIntoView({ behavior:"smooth", block:"start" });
+  if (isMobile() && !panelWin) document.getElementById("mapwrap").scrollIntoView({ behavior:"smooth", block:"start" });
 }
 
 /* ============================= HELPERS ============================= */
@@ -915,7 +922,7 @@ function fmtStamp(d) {
 }
 function fmtClock(d) { return pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes()) + "Z"; }
 function setStatus(t){ document.getElementById("datastatus").textContent = t; }
-function setTableStatus(t){ document.getElementById("tablestatus").textContent = t; }
+function setTableStatus(t){ var e = P("tablestatus"); if (e) e.textContent = t; }
 
 function buildLegend() {
   var g = document.getElementById("legend-grid");
@@ -1072,7 +1079,7 @@ function renderAlerts(features) {
   });
   drawAlertPolys();
   buildAlertsTable();
-  var atab = document.getElementById("tab-alerts");
+  var atab = P("tab-alerts");
   if (atab) atab.textContent = "Alerts (" + alertsData.length + ")";
   reapplyAlertSelection();
 }
@@ -1091,7 +1098,7 @@ function drawAlertPolys() {
 }
 
 function buildAlertsTable() {
-  var body = document.getElementById("alertsbody");
+  var body = P("alertsbody");
   if (!alertsData.length) {
     body.innerHTML = '<div class="empty">No active NWS alerts with mapped areas in view. ' +
       'Pan to an area of active weather, or zoom out to widen the search.</div>';
@@ -1132,14 +1139,14 @@ function selectAlert(i, fromMap) {
   var a = alertsData[i]; if (!a) return;
   selectedAlertUid = a.uid;
   highlightAlert(a);
-  document.querySelectorAll(".alertcard").forEach(function (c) {
+  panelDoc.querySelectorAll(".alertcard").forEach(function (c) {
     c.classList.toggle("open", c.getAttribute("data-aid") === String(i));
   });
   if (a.center) map.flyTo(a.center, Math.max(map.getZoom(), 7), { duration:0.6 });
   if (fromMap) showTab("alerts");
-  var card = document.querySelector('.alertcard[data-aid="' + i + '"]');
+  var card = Pq('.alertcard[data-aid="' + i + '"]');
   if (card) card.scrollIntoView({ block:"nearest" });
-  if (isMobile() && fromMap) document.getElementById("mapwrap").scrollIntoView({ behavior:"smooth", block:"start" });
+  if (isMobile() && fromMap && !panelWin) document.getElementById("mapwrap").scrollIntoView({ behavior:"smooth", block:"start" });
 }
 
 /* ---- point-in-polygon hit test so overlapping alert areas can be disambiguated ---- */
@@ -1218,24 +1225,95 @@ function reapplyAlertSelection() {
   for (var k = 0; k < alertsData.length; k++) if (alertsData[k].uid === selectedAlertUid) { i = k; break; }
   if (i < 0) { alertSelLayer.clearLayers(); return; }
   highlightAlert(alertsData[i]);
-  var card = document.querySelector('.alertcard[data-aid="' + i + '"]');
+  var card = Pq('.alertcard[data-aid="' + i + '"]');
   if (card) card.classList.add("open");
 }
 
 /* ===================== STORM PANEL TABS ===================== */
 function showTab(which) {
   var isText = which === "text", isAlerts = which === "alerts", isTable = !isText && !isAlerts;
-  document.getElementById("tablebody").style.display = isTable ? "" : "none";
-  document.getElementById("textreadout").style.display = isText ? "" : "none";
-  document.getElementById("alertsbody").style.display = isAlerts ? "" : "none";
-  document.getElementById("tab-table").classList.toggle("active", isTable);
-  document.getElementById("tab-text").classList.toggle("active", isText);
-  document.getElementById("tab-alerts").classList.toggle("active", isAlerts);
+  P("tablebody").style.display = isTable ? "" : "none";
+  P("textreadout").style.display = isText ? "" : "none";
+  P("alertsbody").style.display = isAlerts ? "" : "none";
+  P("tab-table").classList.toggle("active", isTable);
+  P("tab-text").classList.toggle("active", isText);
+  P("tab-alerts").classList.toggle("active", isAlerts);
 }
 document.getElementById("tab-table").addEventListener("click", function () { showTab("table"); });
 document.getElementById("tab-text").addEventListener("click", function () { showTab("text"); });
 document.getElementById("tab-alerts").addEventListener("click", function () { showTab("alerts"); });
 document.getElementById("c-alerts").addEventListener("change", function () { drawAlertPolys(); reapplyAlertSelection(); });
+
+/* ---- drag-resize the storm panel ---- */
+(function setupPanelResize() {
+  var rz = document.getElementById("tableresize");
+  var tw = document.getElementById("tablewrap");
+  var stage = document.getElementById("stage");
+  if (!rz || !tw || !stage) return;
+  rz.addEventListener("pointerdown", function (e) {
+    if (panelWin) return;                      // no-op while popped out
+    e.preventDefault();
+    var startY = e.clientY, startH = tw.offsetHeight;
+    try { rz.setPointerCapture(e.pointerId); } catch (_) {}
+    function move(ev) {
+      var maxH = Math.max(120, stage.clientHeight - 210);        // keep room for the map
+      var h = Math.max(90, Math.min(maxH, startH - (ev.clientY - startY)));  // drag up -> taller
+      tw.style.height = h + "px";
+      if (map) map.invalidateSize(false);
+    }
+    function up() {
+      try { rz.releasePointerCapture(e.pointerId); } catch (_) {}
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", up);
+    }
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", up);
+  });
+})();
+
+/* ---- pop the storm panel out into its own window (and dock it back) ---- */
+function popOutPanel() {
+  if (panelWin && !panelWin.closed) { panelWin.focus(); return; }
+  var w = window.open("", "crStormPanel", "width=940,height=460");
+  if (!w) { setTableStatus("Pop-out blocked — allow popups for this site."); return; }
+  var base = location.origin + location.pathname.replace(/[^/]*$/, "");
+  w.document.open();
+  w.document.write('<!doctype html><html><head><meta charset="utf-8">' +
+    '<title>Classic Radar — Storm Panel</title>' +
+    '<link rel="stylesheet" href="' + base + 'styles.css"></head><body class="popout"></body></html>');
+  w.document.close();
+  panelWin = w;
+  var tw = document.getElementById("tablewrap");
+  panelHome = document.createComment("cr-panel-home");
+  tw.parentNode.insertBefore(panelHome, tw);
+  w.document.body.appendChild(w.document.adoptNode(tw));   // move the live panel into the popup
+  panelDoc = w.document;
+  document.getElementById("stage").classList.add("panel-popped");
+  var pb = P("tab-pop"); if (pb) pb.textContent = "⧉ Dock back in";
+  if (map) map.invalidateSize();
+  w.addEventListener("beforeunload", dockPanel);          // closing the window re-docks
+}
+function dockPanel() {
+  if (!panelWin) return;
+  var w = panelWin; panelWin = null;
+  var tw = (panelDoc && panelDoc.getElementById) ? panelDoc.getElementById("tablewrap") : null;
+  panelDoc = document;
+  if (tw && panelHome && panelHome.parentNode) {
+    panelHome.parentNode.insertBefore(document.adoptNode(tw), panelHome);
+    panelHome.parentNode.removeChild(panelHome);
+  }
+  panelHome = null;
+  document.getElementById("stage").classList.remove("panel-popped");
+  var pb = document.getElementById("tab-pop"); if (pb) pb.textContent = "⧉ Pop out";
+  if (map) map.invalidateSize();
+  try { if (w && !w.closed) w.close(); } catch (_) {}
+}
+document.getElementById("tab-pop").addEventListener("click", function () {
+  if (panelWin && !panelWin.closed) dockPanel(); else popOutPanel();
+});
+window.addEventListener("beforeunload", function () {
+  if (panelWin && !panelWin.closed) { try { panelWin.close(); } catch (_) {} }
+});
 
 document.getElementById("refresh").addEventListener("click", function () {
   var src = document.getElementById("product").options[document.getElementById("product").selectedIndex].getAttribute("data-src");

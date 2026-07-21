@@ -63,7 +63,7 @@ a:hover { text-decoration: underline; }
 #mapwrap {
   position: relative;
   flex: 1;
-  min-height: 260px;
+  min-height: 160px;
   background: #000;
 }
 #map { position: absolute; inset: 0; }
@@ -173,14 +173,37 @@ button.act:active { background: #b8b8b8; }
 #legend .sw { width: 15px; height: 11px; }
 #legend .lscale { display: flex; justify-content: space-between; font-size: 9px; }
 
+/* ---- resize divider above the storm panel ---- */
+#tableresize {
+  height: 7px;
+  background: #6b6b6b;
+  border-top: 1px solid #3d3d3d;
+  border-bottom: 1px solid #9a9a9a;
+  cursor: ns-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  touch-action: none;
+}
+#tableresize:hover { background: #4a6ea9; }
+#tableresize .grip { width: 34px; height: 3px; border-radius: 2px; background: #cfd6e0; }
+#stage.panel-popped #tableresize { display: none; }
+#stage.panel-popped #tablewrap { display: none; }
+
 /* ---- Storm attribute table ---- */
 #tablewrap {
   height: 200px;
-  min-height: 120px;
+  min-height: 90px;
   overflow: auto;
   background: #fff;
   border-top: 2px solid #808080;
+  flex: 0 0 auto;
 }
+/* when popped into its own window the panel fills that window */
+body.popout { margin: 0; height: 100%; display: flex; flex-direction: column; background: #fff; }
+body.popout #tablewrap { flex: 1 1 auto; height: auto !important; min-height: 0; border-top: none; }
+.tabbtn.popbtn { text-transform: none; letter-spacing: 0; }
 #tablebar {
   display: flex;
   align-items: center;
@@ -437,6 +460,7 @@ table.storm tbody tr.mk-hi { background: #cfe0ff !important; }
   #stage { flex: 1; min-height: 0; }
   #mapwrap { min-height: 46vh; }
   #tablewrap { height: 40vh; }
+  #tableresize, #tab-pop { display: none; }   /* resize + pop-out are desktop-only */
 
   .panbtn { width: 30px; height: 30px; line-height: 28px; }  /* bigger tap targets */
   #legend { font-size: 9px; right: 4px; bottom: 4px; }

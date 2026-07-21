@@ -225,6 +225,24 @@ that volumetric view is the next build.
   that storm's warning polygon, and flies the map to it. `selectRow`/`hoverCell` in app.js;
   refs kept in `cellRefs{id -> {marker, poly, ...}}`.
 
+## Resizable + pop-out storm panel (desktop)
+- **Drag-resize**: a `#tableresize` divider sits between the playbar and `#tablewrap`; dragging it (pointer
+  events, `setupPanelResize`) sets the panel height (clamped 90px … stage−210) and calls
+  `map.invalidateSize` so Leaflet reflows. `#mapwrap` min-height dropped to 160 so the panel can grow.
+- **Pop-out to its own window**: the `⧉ Pop out` button in `#tablebar` (`popOutPanel`) opens a `window.open`
+  window, writes a minimal doc that `<link>`s the same `styles.css` (absolute URL), then **moves the live
+  `#tablewrap` node** into it via `adoptNode` (a `panelHome` comment marks its spot in `#stage`, which gets
+  `.panel-popped` so the map fills). Because the panel DOM now lives in another document, **all panel-scoped
+  lookups go through `panelDoc`** (`P(id)`/`Pq(sel)` + `panelDoc.querySelectorAll`) — `buildTable`,
+  `buildAlertsTable`, `renderStorm`'s text/status writes, `showTab`, `setTableStatus`, `selectRow`,
+  `hoverCell`, `selectAlert`, `reapplyAlertSelection`. Event listeners persist on the moved nodes, so
+  clicking a row/card/tab in the popup still drives the map in the opener. The same button (now
+  `⧉ Dock back in`) or closing the window (`beforeunload`) calls `dockPanel`, which `adoptNode`s the panel
+  back to `panelHome` and restores `panelDoc = document`. Resize + pop-out are hidden on mobile.
+  Verified (via a same-origin iframe stand-in, since the automated pane blocks `window.open` for synthetic
+  clicks — real clicks work): drag 200→320px; pop-out moves the panel out (map fills, styles link, tab
+  clicks in the popup redirect through `panelDoc`); dock-back restores it and main-doc rendering resumes.
+
 ## Responsive / mobile
 Single responsive layout (no separate "mobile mode" build). Breakpoint `max-width: 760px`:
 sidebar collapses into a drawer toggled by the ☰ button in the masthead (`body.controls-open`),
