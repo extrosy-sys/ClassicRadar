@@ -164,6 +164,26 @@ stable alert id). `esc()` HTML-escapes all alert text. Verified live near KJKL: 
   "All weather-alert areas" toggle off. Verified live: a Tornado Warning + Flood Advisory overlap → 2-item
   picker, each row highlights its own area on hover, click opens the card.
 
+## Precip color key + echo tops (added 2026-07-21)
+- **Precip color key** (`#precipkey`, bottom-right; `showPrecipKey`/`clearPrecipKey`): fetches the MRMS QPE
+  ImageServer's OWN `legend?f=json&renderingRule={rasterFunction}` and renders its base64 swatches + inch
+  tick labels — so the key always matches the tiles exactly (no hardcoded ramp). Shown for precip products,
+  hidden otherwise (the dBZ `#legend` is already hidden for non-refl).
+- **Echo tops (EET, product 135)** — `level3.js Level3.fetchEET(site3)` decodes the current Enhanced Echo
+  Tops via the SAME bzip2 + packet-16 path as super-res reflectivity (`decodeReflectivity`), then returns a
+  `sampleTop(azDeg, rangeNm)` closure (1° radials bucketed by azimuth, ~186 nm range → `gateNm=186/nbins`,
+  small az/range window → max). **Encoding reverse-engineered from live data: topKft = (level & 0x7F) − 2**
+  (low 7 bits − 2 kft; high bit 0x80 = "topped"/≥ flag; levels <3 → none) — verified: raw peaks 33-38 →
+  31-36 kft, max 0x7f&192−2 = 62 kft. NSS (Storm Structure, has TOP directly) is NOT carried in the
+  real-time Unidata bucket; EET IS, so tops come from EET.
+- **Per-cell tops**: `loadStormData` fetches EET (cached 3 min, `fetchEETCached`) only for radars that
+  returned NST cells; `renderStorm` samples each cell's `top` at its (az, range). Surfaced three ways:
+  (a) **Storm-top callouts** map layer (`c-tops` toggle, `tops` pane z650, `.topbox` "▲NNkft" labels);
+  (b) a **Top (kft)** column in the storm attribute table; (c) the **alerts table** — `cellTops` +
+  `alertMaxTop`/`annotateAlertTops` show the max echo top of any cell inside each alert's polygon (a chip in
+  the card header + a line in the detail). Verified live at KJKL: 43 callouts (▲48kft…), 43 table rows with
+  tops, alert cards showing Tornado-Warning tops of 51-52 kft.
+
 ## Satellite & 2D reliability
 - **Satellite** (NASA GIBS / GOES-East, keyless, full-disk): products "Infrared (cloud tops)" =
   `GOES-East_ABI_Band13_Clean_Infrared` (Level6) and "GeoColor (visible)" = `GOES-East_ABI_GeoColor`

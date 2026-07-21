@@ -48,6 +48,7 @@ pane("warn", 400);
 pane("sites", 500);
 pane("track", 620);
 pane("cells", 640);
+pane("tops", 650);
 
 /* base + clutter tile layers */
 var layers = {
@@ -132,6 +133,7 @@ function showSat(kind) {
    rasterFunction (rft_1hr = last hour ≈ rate, rft_24hr = daily total). All in inches. */
 var precipLayer = null;
 var MRMS_EXPORT = "https://mapservices.weather.noaa.gov/raster/rest/services/obs/mrms_qpe/ImageServer/exportImage";
+var MRMS_LEGEND = "https://mapservices.weather.noaa.gov/raster/rest/services/obs/mrms_qpe/ImageServer/legend";
 var WEBMERC_MAX = 20037508.342789244;
 var PrecipTileLayer = L.TileLayer.extend({
   getTileUrl: function (coords) {
@@ -150,6 +152,28 @@ function showPrecip(rule) {
   precipLayer = attachRetry(new PrecipTileLayer("", { pane:"radar", opacity:radarOpacity(),
     rasterFunction:rule, maxZoom:18, maxNativeZoom:12, noWrap:true,
     attribution:"Precip &copy; NOAA/NWS MRMS QPE" }), "MRMS precip").addTo(map);
+  showPrecipKey(rule);
+}
+
+/* precipitation color key — the MRMS ImageServer's own legend swatches, so it matches the tiles */
+function clearPrecipKey() { var el = document.getElementById("precipkey"); if (el) { el.style.display = "none"; el.innerHTML = ""; } }
+function showPrecipKey(rule) {
+  var el = document.getElementById("precipkey"); if (!el) return;
+  el.innerHTML = '<div class="pk-title">Precip (in)</div><div class="pk-ramp pk-load">loading…</div>';
+  el.style.display = "block";
+  var url = MRMS_LEGEND + "?f=json&renderingRule=" + encodeURIComponent(JSON.stringify({ rasterFunction: rule }));
+  fetch(url).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+    var leg = j && j.layers && j.layers[0] && j.layers[0].legend;
+    if (!leg || !leg.length) { el.innerHTML = '<div class="pk-title">Precip (in)</div>'; return; }
+    function lb(e) { var m = (e.label || "").match(/([\d.]+)/); return m ? m[1] : ""; }
+    var ramp = leg.map(function (e) {
+      return '<img class="pk-sw" title="' + esc(e.label) + '" src="data:' + (e.contentType || "image/png") + ";base64," + e.imageData + '">';
+    }).join("");
+    var n = leg.length, idx = [0, Math.floor(n * 0.33), Math.floor(n * 0.66), n - 1];
+    var ticks = idx.map(function (i) { return '<span>' + esc(lb(leg[i])) + '</span>'; }).join("");
+    el.innerHTML = '<div class="pk-title">Precip (in)</div><div class="pk-ramp">' + ramp +
+      '</div><div class="pk-scale">' + ticks + '</div>';
+  }).catch(function () { el.innerHTML = '<div class="pk-title">Precip (in)</div>'; });
 }
 
 function clearFrames() {
@@ -427,7 +451,7 @@ function applyProduct() {
   var note = document.getElementById("prodnote");
   pause();
   if (srvActive) closeSingleRadar(false);                // changing product drops the single-radar overlay
-  clearPrecip();                                          // and any MRMS precip layer
+  clearPrecip(); clearPrecipKey();                       // and any MRMS precip layer + its key
   document.getElementById("legend").style.display = (src === "rv") ? "" : "none";  // dBZ scale is refl-only
 
   if (src === "rv") {
@@ -642,6 +666,7 @@ var trackLayer = L.layerGroup([], { pane:"track" }).addTo(map);
 var alertLayer = L.layerGroup([], { pane:"alerts" }).addTo(map);      // all in-view alert areas (toggle)
 var alertSelLayer = L.layerGroup([], { pane:"warn" }).addTo(map);     // the selected alert, highlighted
 var alertHoverLayer = L.layerGroup([], { pane:"warn" }).addTo(map);   // picker hover preview
+var topsLayer = L.layerGroup([], { pane:"tops" }).addTo(map);         // storm-top callouts (toggle)
 var lastL3 = null;
 
 function haversine(a, b, c, d) {
@@ -704,14 +729,32 @@ function loadStormData() {
     return fetchNstCached(Level3.site3(s.id)).then(function (r) { return { site: s, result: r }; });
   }));
   return Promise.all([warnP, l3P]).then(function (res) {
-    renderStorm(res[0], res[1].filter(function (x) { return x.result; }));
+    var l3List = res[1].filter(function (x) { return x.result; });
+    // fetch Enhanced Echo Tops only for the radars that actually returned cells (cached)
+    var eetSites = l3List.filter(function (e) { return e.result.cells && e.result.cells.length; });
+    return Promise.all(eetSites.map(function (e) {
+      return fetchEETCached(Level3.site3(e.site.id)).then(function (s) { return { id: e.site.id, sampler: s }; });
+    })).then(function (eets) {
+      var eetBySite = {};
+      eets.forEach(function (e) { if (e.sampler) eetBySite[e.id] = e.sampler; });
+      renderStorm(res[0], l3List, eetBySite);
+    });
   });
+}
+var eetCache = {};   // site3 -> { t, sampler } (3-min TTL)
+function fetchEETCached(site3) {
+  var e = eetCache[site3];
+  if (e && Date.now() - e.t < 180000) return Promise.resolve(e.sampler);
+  return Level3.fetchEET(site3).then(function (s) { eetCache[site3] = { t: Date.now(), sampler: s }; return s; })
+    .catch(function () { return null; });
 }
 var loadWarnings = loadStormData;   // back-compat alias
 
-function renderStorm(features, l3List) {
+function renderStorm(features, l3List, eetBySite) {
+  eetBySite = eetBySite || {};
   warnLayer.clearLayers();
   trackLayer.clearLayers();
+  topsLayer.clearLayers();
   cellMarkers.forEach(function (m){ map.removeLayer(m); });
   cellMarkers = []; rowsById = {}; cellRefs = {}; selectedId = null;
   lastL3 = l3List[0] ? l3List[0].result : null;
@@ -730,14 +773,16 @@ function renderStorm(features, l3List) {
   l3List.forEach(function (entry, si) {
     var res = entry.result;
     if (!res || !res.cells) return;
+    var eet = eetBySite[entry.site.id];
     res.cells.forEach(function (c) {
       if (c.lat < bounds.getSouth() || c.lat > bounds.getNorth() ||
           c.lon < bounds.getWest() || c.lon > bounds.getEast()) return;
+      var top = (eet && c.az != null && c.ran != null) ? eet.sampleTop(c.az, c.ran) : null;
       rows.push({
         key: c.id + "#" + si, id: c.id, site: entry.site.id,
         glyph: "●", cls: "t-cell", threat: "cell", event: "Radar cell · " + entry.site.id,
         hail: null, wind: null, dir: (c.headingToward != null ? compass(c.headingToward) : "—"),
-        spd: c.speedKt >= 0 ? c.speedKt : null,
+        spd: c.speedKt >= 0 ? c.speedKt : null, top: top,
         area: "", expires: null, center: [c.lat, c.lon], track: c.forecast, tvs: false
       });
     });
@@ -817,8 +862,18 @@ function renderStorm(features, l3List) {
       cellMarkers.push(marker);
       if (document.getElementById("c-cells").checked) marker.addTo(map);
     }
+    // storm-top callout (echo top from EET), toggleable clutter layer
+    if (r.center && r.top != null && document.getElementById("c-tops").checked) {
+      L.marker(r.center, { pane:"tops", interactive:false, icon: L.divIcon({
+        className:"topcallout", iconSize:[0,0], html:'<span class="topbox">▲' + r.top + 'kft</span>' }) }).addTo(topsLayer);
+    }
     cellRefs[r.key] = { marker:marker, poly:r._poly || null, color:r._color || "#4a6ea9", center:r.center };
   });
+
+  // remember cell tops so the alerts table can show the max echo top inside each alert area
+  cellTops = rows.filter(function (r) { return r.top != null && r.center; })
+    .map(function (r) { return { lat: r.center[0], lon: r.center[1], top: r.top }; });
+  annotateAlertTops();
 
   buildTable(rows);
 
@@ -849,7 +904,7 @@ function buildTable(rows) {
     return;
   }
   var h = '<table class="storm"><thead><tr>' +
-    '<th>ID</th><th>Threat</th><th>Event</th><th>Max Hail (in)</th>' +
+    '<th>ID</th><th>Threat</th><th>Event</th><th>Top (kft)</th><th>Max Hail (in)</th>' +
     '<th>Max Wind (kt)</th><th>Dir</th><th>Spd (kt)</th><th>Area</th><th>Expires</th>' +
     '</tr></thead><tbody>';
   rows.forEach(function (r) {
@@ -858,6 +913,7 @@ function buildTable(rows) {
       '<td class="id">' + r.id + '</td>' +
       '<td class="ev"><span class="threat ' + r.cls + '">' + r.glyph + "</span> " + r.threat.toUpperCase() + '</td>' +
       '<td class="ev">' + r.event + '</td>' +
+      '<td>' + (r.top != null ? r.top : "—") + '</td>' +
       '<td>' + (r.hail != null ? r.hail.toFixed(2) : "—") + '</td>' +
       '<td>' + (r.wind != null ? r.wind : "—") + '</td>' +
       '<td class="dir">' + r.dir + '</td>' +
@@ -1016,6 +1072,7 @@ document.getElementById("c-cells").addEventListener("change", function () {
 document.getElementById("c-tracks").addEventListener("change", function () {
   if (this.checked) trackLayer.addTo(map); else map.removeLayer(trackLayer);
 });
+document.getElementById("c-tops").addEventListener("change", function () { loadWarnings(); });
 document.getElementById("c-iem").addEventListener("change", syncIem);
 map.on("zoomend", syncIem);
 document.getElementById("c-sites").addEventListener("change", function () {
@@ -1030,6 +1087,7 @@ document.getElementById("c-sites").addEventListener("change", function () {
    click an area on the map -> open its card. National list cached 60 s, re-filtered per pan. */
 var ALERTS_URL = "https://api.weather.gov/alerts/active?status=actual&message_type=alert";
 var alertsData = [];          // in-view alerts (sorted)
+var cellTops = [];            // [{lat,lon,top}] storm-cell echo tops (kft) sampled from EET
 var alertRefs = {};           // index -> { poly, center }
 var alertsCache = null;       // { t, features } national list, 60 s TTL
 var selectedAlertUid = null;
@@ -1110,13 +1168,14 @@ function buildAlertsTable() {
     return '<div class="alertcard sev-' + a.severity.toLowerCase() + '" data-aid="' + i + '">' +
       '<div class="ah"><span class="asev" style="background:' + alertColor(a.severity) + '">' + esc(a.severity) + '</span>' +
         '<span class="aevent">' + esc(a.event) + '</span>' +
+        '<span class="atop"></span>' +
         '<span class="aexp">' + (a.expires ? "exp " + esc(fmtLocal(a.expires)) : "") + '</span></div>' +
       '<div class="aarea">' + area + '</div>' +
       '<div class="adetail">' +
         (a.headline ? '<div class="ahl">' + esc(a.headline) + '</div>' : '') +
         '<pre class="adesc">' + esc(a.desc || "(no description provided)") + '</pre>' +
         (a.instr ? '<div class="ainst"><b>PRECAUTIONARY/PREPAREDNESS ACTIONS:</b> ' + esc(a.instr) + '</div>' : '') +
-        '<div class="ameta">' + esc(a.sender) +
+        '<div class="ameta atopmeta">' + esc(a.sender) +
           (a.effective ? " · from " + esc(fmtLocal(a.effective)) : "") +
           (a.expires ? " · until " + esc(fmtLocal(a.expires)) : "") + '</div>' +
       '</div></div>';
@@ -1125,6 +1184,31 @@ function buildAlertsTable() {
     c.querySelector(".ah").addEventListener("click", function () {
       selectAlert(parseInt(c.getAttribute("data-aid"), 10), false);
     });
+  });
+  annotateAlertTops();
+}
+
+/* max echo top (kft) of any storm cell whose centroid falls inside an alert's area */
+function alertMaxTop(a) {
+  if (!a.geom || !cellTops.length) return null;
+  var mx = null;
+  for (var i = 0; i < cellTops.length; i++) {
+    var ct = cellTops[i];
+    if (geomContains(a.geom, ct.lat, ct.lon) && (mx == null || ct.top > mx)) mx = ct.top;
+  }
+  return mx;
+}
+/* fill each alert card's echo-top chip from the latest sampled cell tops */
+function annotateAlertTops() {
+  panelDoc.querySelectorAll(".alertcard").forEach(function (c) {
+    var a = alertsData[parseInt(c.getAttribute("data-aid"), 10)]; if (!a) return;
+    var top = alertMaxTop(a);
+    var chip = c.querySelector(".atop"), meta = c.querySelector(".atopmeta");
+    if (chip) chip.textContent = top != null ? "▲" + top + "kft" : "";
+    if (meta && top != null && meta.getAttribute("data-topped") !== "1") {
+      meta.insertAdjacentHTML("afterbegin", '<span class="atopline">Max echo top in area: ' + top + ' kft</span>');
+      meta.setAttribute("data-topped", "1");
+    }
   });
 }
 

@@ -314,6 +314,31 @@ table.storm tbody tr:hover { background: #dbe7ff; cursor: pointer; }
 #symlegend .t-hail { color: #ffe23a; }   /* severe / hail */
 #symlegend .t-cell { color: #7fb0ff; }   /* radar cell    */
 
+/* precipitation color key (bottom-right, mirrors #legend position) */
+#precipkey {
+  position: absolute; z-index: 500; right: 6px; bottom: 6px;
+  background: rgba(20,20,20,0.86); color: #fff; border: 1px solid #000;
+  padding: 4px 6px; font-family: "Courier New", monospace; font-size: 10px;
+}
+#precipkey .pk-title { font-size: 9px; margin-bottom: 2px; }
+#precipkey .pk-ramp { display: flex; align-items: flex-end; line-height: 0; }
+#precipkey .pk-ramp.pk-load { line-height: 1.2; }
+#precipkey .pk-sw { width: 7px; height: 11px; display: block; }
+#precipkey .pk-scale { display: flex; justify-content: space-between; font-size: 8px; margin-top: 1px; }
+
+/* storm-top callouts on the map (echo tops from EET) */
+.topcallout { pointer-events: none; }
+.topcallout .topbox {
+  position: absolute; left: 6px; top: -22px; white-space: nowrap;
+  font: bold 10px "Courier New", monospace; color: #ffe38a;
+  background: rgba(20,20,20,0.7); border: 1px solid #7a6a2a; border-radius: 2px;
+  padding: 0 3px; text-shadow: 0 0 2px #000;
+}
+
+/* echo-top chip + line in the alerts table */
+.alertcard .atop { color: #b06a00; font-weight: bold; font-size: 10px; white-space: nowrap; }
+.alertcard .atopline { display: block; color: #7a4a00; font-weight: bold; margin-bottom: 2px; }
+
 /* single-radar tilt viewer toolset (top-right) */
 #srvtool {
   position: absolute; z-index: 500; top: 8px; right: 8px; width: 148px;

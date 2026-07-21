@@ -87,6 +87,46 @@ window.Level3 = {
     }).catch(function () { return null; });
   },
 
+  /** Echo-top height (kft MSL) from an EET (product 135) level: low 7 bits - 2 kft;
+      the high bit (0x80) is the "topped" (>= this height) flag. Levels < 3 => no top. */
+  eetTopKft: function (level) { var h = (level & 0x7f) - 2; return h >= 1 ? h : null; },
+
+  /** Fetch + decode the current Enhanced Echo Tops (EET) for a site and return a sampler.
+      EET is bzip2 packet-16 radials (like super-res reflectivity), 1° radials, ~186 nm range. */
+  fetchEET: function (site3) {
+    var self = this;
+    return this.latestKey(site3, "EET").then(function (key) {
+      if (!key) return null;
+      return fetch(self.BUCKET + key)
+        .then(function (r) { return r.ok ? r.arrayBuffer() : null; })
+        .then(function (buf) {
+          if (!buf) return null;
+          var t = self.decodeReflectivity(new Uint8Array(buf));   // reuses bzip2 + packet-16 path
+          if (!t || !t.radials.length) return null;
+          var gateNm = 186.0 / t.nbins;                            // EET range is ~186 nm
+          var grid = {};
+          t.radials.forEach(function (rad) { grid[Math.round(rad.az) % 360] = rad.levels; });
+          return {
+            radarLat: t.radarLat, radarLon: t.radarLon, nbins: t.nbins, gateNm: gateNm,
+            /** max echo top (kft) in a small window around a cell's (az deg, range nm), or null */
+            sampleTop: function (az, ranNm) {
+              var gi = Math.round(ranNm / gateNm), best = -1;
+              for (var da = -1; da <= 1; da++) {
+                var levs = grid[(((Math.round(az) + da) % 360) + 360) % 360];
+                if (!levs) continue;
+                for (var dg = -2; dg <= 2; dg++) {
+                  var g = gi + dg; if (g < 0 || g >= levs.length) continue;
+                  var top = self.eetTopKft(levs[g]);
+                  if (top != null && top > best) best = top;
+                }
+              }
+              return best >= 1 ? best : null;
+            }
+          };
+        });
+    }).catch(function () { return null; });
+  },
+
   /** dBZ from a digital reflectivity level (product 153/94): 0.5*level - 33, else null. */
   levelToDbz: function (v) { return v >= 2 ? 0.5 * v - 33 : null; },
 
