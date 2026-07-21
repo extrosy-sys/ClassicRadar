@@ -42,13 +42,16 @@ function Pq(sel) { return panelDoc.querySelector(sel); }
 function pane(name, z) { map.createPane(name); map.getPane(name).style.zIndex = z; }
 pane("radar", 250);
 pane("velocity", 260);
+pane("outlook", 340);         // SPC convective-outlook risk areas (background)
 pane("clutter", 350);
 pane("alerts", 380);
+pane("watches", 385);         // SPC watch boxes
 pane("warn", 400);
 pane("sites", 500);
 pane("track", 620);
 pane("cells", 640);
 pane("tops", 650);
+pane("metar", 660);           // surface-observation station plots (top)
 
 /* base + clutter tile layers */
 var layers = {
@@ -119,7 +122,9 @@ var GIBS = {
   ir:  { url:"https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GOES-East_ABI_Band13_Clean_Infrared/default/default/GoogleMapsCompatible_Level6/{z}/{y}/{x}.png",
          maxNative:6, opacity:0.85 },
   vis: { url:"https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GOES-East_ABI_GeoColor/default/default/GoogleMapsCompatible_Level7/{z}/{y}/{x}.jpg",
-         maxNative:7, opacity:0.95 }
+         maxNative:7, opacity:0.95 },
+  wv:  { url:"https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/GOES-East_ABI_Air_Mass/default/default/GoogleMapsCompatible_Level6/{z}/{y}/{x}.png",
+         maxNative:6, opacity:0.9 }
 };
 function clearSat() { if (satLayer) { map.removeLayer(satLayer); satLayer = null; } }
 function showSat(kind) {
@@ -235,8 +240,28 @@ var SRV_PRODUCTS = {
     color: function (L) { return dbzColor(0.5 * L - 33); } },
   vel:  { codes: ["N0G","N1G","N2G","N3G"], label: "Velocity",
     keep: function (L) { return L >= 2 && L !== 255; },                   // 0 below-thr, 1 range-folded, 255 no-data
-    color: function (L) { return velColor((L - 129) * 0.5); } }
+    color: function (L) { return velColor((L - 129) * 0.5); } },
+  cc:   { codes: ["N0C","N1C","N2C","N3C"], label: "Corr Coef",           // CC = 0.2 + (L-2)*0.00336, 0.2..1.05
+    keep: function (L) { return L >= 2; },
+    color: function (L) { return ccColor(0.2 + (L - 2) * 0.003360); } },
+  zdr:  { codes: ["N0X","N1X","N2X","N3X"], label: "Diff Refl",           // ZDR dB = (L-2)*0.0625 - 7.875
+    keep: function (L) { return L >= 2; },
+    color: function (L) { return zdrColor((L - 2) * 0.0625 - 7.875); } }
 };
+function ccColor(v) {   // correlation coefficient: <0.8 non-met (red) .. ~0.97 mixed .. >=0.98 uniform precip (blue)
+  if (v >= 0.98) return "rgb(20,90,200)";
+  if (v >= 0.95) return "rgb(30,160,90)";
+  if (v >= 0.90) return "rgb(210,200,40)";
+  if (v >= 0.80) return "rgb(230,130,30)";
+  return "rgb(210,40,40)";
+}
+function zdrColor(v) {  // differential reflectivity (dB): <=0 gray/blue, small+ green, large+ (big drops/rain) red
+  if (v <= 0) return "rgb(120,120,150)";
+  if (v < 1) return "rgb(60,150,90)";
+  if (v < 2) return "rgb(210,200,40)";
+  if (v < 4) return "rgb(230,130,30)";
+  return "rgb(210,40,40)";
+}
 
 function velColor(v) {                                   // matches the 3D velocity ramp
   var a = Math.min(1, Math.abs(v) / 35);
@@ -252,7 +277,7 @@ function dbzColor(v) {                                   // NWS ramp (DBZ_RAMP) 
 }
 
 function openSingleRadar(s, mode) {
-  srv.site = s; srv.mode = (mode === "vel" ? "vel" : "refl"); srv.tilt = 0; srv.elevs = [];
+  srv.site = s; srv.mode = SRV_PRODUCTS[mode] ? mode : "refl"; srv.tilt = 0; srv.elevs = [];
   buildSrvTool();
   map.setView([s.lat, s.lon], Math.min(Math.max(map.getZoom(), 7), 9));   // regional view on the radar
   srvLoadTilt();
@@ -314,7 +339,10 @@ function buildSrvTool() {
   var tl = document.getElementById("srvtool"); if (!tl) return;
   tl.innerHTML =
     '<div class="srv-hd"><b id="srv-site"></b><button id="srv-close" title="Return to composite">&times;</button></div>' +
-    '<div class="srv-mode"><button id="srv-refl">Refl</button><button id="srv-vel">Vel</button></div>' +
+    '<div class="srv-mode"><select id="srv-mode">' +
+      '<option value="refl">Reflectivity</option><option value="vel">Velocity</option>' +
+      '<option value="cc">Corr Coef (CC)</option><option value="zdr">Diff Refl (ZDR)</option>' +
+    '</select></div>' +
     '<div class="srv-body">' +
       '<div class="srv-tiltcol"><input id="srv-tilt" type="range" min="0" max="3" step="1" value="0" orient="vertical"><span class="srv-cap">tilt</span></div>' +
       '<div class="srv-read"><div id="srv-elev" class="srv-elev">--</div><div id="srv-tnum" class="srv-sub">1/4</div><div id="srv-legend" class="srv-legend"></div></div>' +
@@ -322,8 +350,7 @@ function buildSrvTool() {
     '<div id="srv-status" class="srv-status" style="display:none"></div>';
   tl.style.display = "block";
   document.getElementById("srv-close").onclick = function () { closeSingleRadar(true); };
-  document.getElementById("srv-refl").onclick = function () { setSrvMode("refl"); };
-  document.getElementById("srv-vel").onclick  = function () { setSrvMode("vel"); };
+  document.getElementById("srv-mode").onchange = function () { setSrvMode(this.value); };
   var tilt = document.getElementById("srv-tilt");
   tilt.value = srv.tilt;
   tilt.oninput = function () { srv.tilt = parseInt(this.value, 10); updateSrvLabels(); srvLoadTilt(); };
@@ -334,21 +361,26 @@ function setSrvMode(m) {
   srv.mode = m; srv.elevs = [];
   updateSrvLabels(); srvLoadTilt();
 }
+var SRV_LEGENDS = {
+  refl: '<span class="lk" style="background:#0300f4"></span>15<span class="lk" style="background:#02fd02"></span>25' +
+        '<span class="lk" style="background:#fdf802"></span>40<span class="lk" style="background:#fd0000"></span>55+',
+  vel:  '<span class="lk vin"></span>toward<br><span class="lk vout"></span>away',
+  cc:   '<span class="lk" style="background:rgb(210,40,40)"></span>&lt;0.8<span class="lk" style="background:rgb(210,200,40)"></span>0.9' +
+        '<span class="lk" style="background:rgb(20,90,200)"></span>&ge;0.98',
+  zdr:  '<span class="lk" style="background:rgb(120,120,150)"></span>&le;0<span class="lk" style="background:rgb(60,150,90)"></span>1' +
+        '<span class="lk" style="background:rgb(210,40,40)"></span>4+&nbsp;dB'
+};
 function updateSrvLabels() {
   if (!srv.site) return;
   var el = document.getElementById("srv-site"); if (el) el.textContent = srv.site.id;
-  document.getElementById("srv-refl").classList.toggle("on", srv.mode === "refl");
-  document.getElementById("srv-vel").classList.toggle("on", srv.mode === "vel");
+  document.getElementById("srv-mode").value = srv.mode;
   document.getElementById("srv-tilt").value = srv.tilt;
   document.getElementById("srv-tnum").textContent = (srv.tilt + 1) + "/4";
   var e = srv.elevs[srv.tilt];
   document.getElementById("srv-elev").textContent = (e != null ? e.toFixed(1) + "°" : "…");
-  document.getElementById("srv-legend").innerHTML = srv.mode === "vel"
-    ? '<span class="lk vin"></span>toward<br><span class="lk vout"></span>away'
-    : '<span class="lk" style="background:#0300f4"></span>15<span class="lk" style="background:#02fd02"></span>25' +
-      '<span class="lk" style="background:#fdf802"></span>40<span class="lk" style="background:#fd0000"></span>55+';
-  var lg = document.getElementById("legend");             // hide the dBZ scale while in velocity
-  if (lg) lg.style.display = (srv.mode === "vel") ? "none" : "";
+  document.getElementById("srv-legend").innerHTML = SRV_LEGENDS[srv.mode] || "";
+  var lg = document.getElementById("legend");             // dBZ scale only makes sense for reflectivity
+  if (lg) lg.style.display = (srv.mode === "refl") ? "" : "none";
 }
 function setSrvStatus(m) {
   var e = document.getElementById("srv-status"); if (!e) return;
@@ -683,6 +715,9 @@ var alertLayer = L.layerGroup([], { pane:"alerts" }).addTo(map);      // all in-
 var alertSelLayer = L.layerGroup([], { pane:"warn" }).addTo(map);     // the selected alert, highlighted
 var alertHoverLayer = L.layerGroup([], { pane:"warn" }).addTo(map);   // picker hover preview
 var topsLayer = L.layerGroup([], { pane:"tops" }).addTo(map);         // storm-top callouts (toggle)
+var outlookLayer = L.layerGroup([], { pane:"outlook" }).addTo(map);   // SPC convective outlook (toggle)
+var watchesLayer = L.layerGroup([], { pane:"watches" }).addTo(map);   // SPC watch boxes (toggle)
+var metarLayer = L.layerGroup([], { pane:"metar" }).addTo(map);       // METAR surface obs (toggle)
 var lastL3 = null;
 
 function haversine(a, b, c, d) {
@@ -1062,6 +1097,23 @@ document.getElementById("site").addEventListener("change", function () {
   }
 });
 document.getElementById("recenter").addEventListener("click", centerOnSite);
+
+var myLocMarker = null;
+document.getElementById("mylocation").addEventListener("click", function () {
+  if (!navigator.geolocation) { setStatus("Geolocation isn't available in this browser."); return; }
+  setStatus("Locating…");
+  navigator.geolocation.getCurrentPosition(function (pos) {
+    var lat = pos.coords.latitude, lon = pos.coords.longitude;
+    if (myLocMarker) map.removeLayer(myLocMarker);
+    myLocMarker = L.marker([lat, lon], { pane:"cells", icon: L.divIcon({
+      className:"myloc", iconSize:[16,16], iconAnchor:[8,8], html:'<span class="mydot"></span>' }) }).addTo(map);
+    map.setView([lat, lon], Math.max(map.getZoom(), 9));   // loadWarnings picks the in-view radars
+    var n = nearestSite(lat, lon);
+    loadWarnings();
+    if (document.getElementById("c-metar").checked) loadMetar();
+    setStatus("Located you" + (n ? " · nearest radar " + n.id : "") + ".");
+  }, function (err) { setStatus("Location error: " + err.message); }, { enableHighAccuracy:false, timeout:10000, maximumAge:60000 });
+});
 document.getElementById("view3d").addEventListener("click", function () {
   var c = map.getCenter();
   var site = nearestSite(c.lat, c.lng);
@@ -1110,6 +1162,9 @@ document.getElementById("c-tracks").addEventListener("change", function () {
   if (this.checked) trackLayer.addTo(map); else map.removeLayer(trackLayer);
 });
 document.getElementById("c-tops").addEventListener("change", function () { loadWarnings(); });
+document.getElementById("c-outlook").addEventListener("change", loadOutlook);
+document.getElementById("c-watches").addEventListener("change", loadWatches);
+document.getElementById("c-metar").addEventListener("change", loadMetar);
 document.getElementById("c-iem").addEventListener("change", syncIem);
 map.on("zoomend", syncIem);
 document.getElementById("c-sites").addEventListener("change", function () {
@@ -1352,6 +1407,116 @@ function reapplyAlertSelection() {
   if (card) card.classList.add("open");
 }
 
+/* ===================== EXTRA WEATHER LAYERS (all toggle-able) ===================== */
+var geoCache = {};
+function fetchGeo(url, ttl) {
+  var c = geoCache[url];
+  if (c && Date.now() - c.t < (ttl || 120000)) return Promise.resolve(c.data);
+  return fetch(url, { headers:{ "Accept":"application/geo+json" } })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) { if (j) geoCache[url] = { t: Date.now(), data: j }; return j; })
+    .catch(function () { return c ? c.data : null; });
+}
+
+/* SPC Day-1 Categorical Convective Outlook (ships its own risk colors) */
+var OUTLOOK_URL = "https://www.spc.noaa.gov/products/outlook/day1otlk_cat.nolyr.geojson";
+function loadOutlook() {
+  outlookLayer.clearLayers();
+  if (!document.getElementById("c-outlook").checked) return;
+  fetchGeo(OUTLOOK_URL, 600000).then(function (j) {
+    if (!j || !document.getElementById("c-outlook").checked) return;
+    (j.features || []).forEach(function (f) {
+      var p = f.properties || {};
+      L.geoJSON(f.geometry, { pane:"outlook", style:{ color:p.stroke || "#888", weight:1.5,
+        fill:true, fillColor:p.fill || "#ccc", fillOpacity:0.25 } })
+        .bindPopup("<b>SPC Day 1 Outlook</b><br>" + esc(p.LABEL2 || p.LABEL || "")).addTo(outlookLayer);
+    });
+  });
+}
+
+/* SPC Watches — tornado / severe thunderstorm watch boxes (via IEM) */
+var WATCH_URL = "https://mesonet.agron.iastate.edu/json/spcwatch.py?fmt=geojson";
+function loadWatches() {
+  watchesLayer.clearLayers();
+  if (!document.getElementById("c-watches").checked) return;
+  fetchGeo(WATCH_URL, 300000).then(function (j) {
+    if (!j || !document.getElementById("c-watches").checked) return;
+    (j.features || []).forEach(function (f) {
+      var p = f.properties || {}, tor = p.type === "TOR", col = tor ? "#e01f1f" : "#e8a200";
+      L.geoJSON(f.geometry, { pane:"watches", style:{ color:col, weight:2.5, fill:true,
+        fillColor:col, fillOpacity:0.06, dashArray:"9 5" } })
+        .bindPopup("<b>" + (tor ? "Tornado" : "Svr T'storm") + " Watch #" + esc(p.number) + "</b>" +
+          (p.is_pds ? ' <span style="color:#e01f1f">PDS</span>' : "") +
+          "<br>hail&nbsp;to&nbsp;" + esc(p.max_hail_size) + '"&nbsp;· wind&nbsp;' + esc(p.max_wind_gust_knots) + "&nbsp;kt" +
+          "<br>until " + esc((p.expire || "").replace("T", " ").replace("Z", " UTC")))
+        .addTo(watchesLayer);
+    });
+  });
+}
+
+/* METAR / ASOS surface observations — in-view, de-cluttered station plots.
+   Source = IEM per-state ASOS currents (CORS-open; aviationweather.gov is not). We pick the
+   states whose bbox overlaps the view (capped) and merge their current obs. */
+var STATE_BBOX = {  // [south, west, north, east]
+  AL:[30.1,-88.5,35.1,-84.9],AZ:[31.3,-114.9,37.1,-109],AR:[33,-94.7,36.6,-89.6],CA:[32.5,-124.5,42.1,-114.1],
+  CO:[36.9,-109.1,41.1,-102],CT:[40.9,-73.8,42.1,-71.7],DE:[38.4,-75.8,39.9,-75],FL:[24.4,-87.7,31.1,-80],
+  GA:[30.3,-85.7,35.1,-80.8],IA:[40.3,-96.7,43.6,-90.1],ID:[41.9,-117.3,49.1,-111],IL:[36.9,-91.6,42.6,-87],
+  IN:[37.7,-88.2,41.8,-84.7],KS:[36.9,-102.1,40.1,-94.6],KY:[36.5,-89.6,39.2,-81.9],LA:[28.9,-94.1,33.1,-88.8],
+  MA:[41.2,-73.6,42.9,-69.9],MD:[37.9,-79.5,39.8,-75],ME:[43,-71.1,47.5,-66.9],MI:[41.7,-90.5,48.3,-82.3],
+  MN:[43.4,-97.3,49.4,-89.5],MO:[35.9,-95.8,40.7,-89.1],MS:[30.1,-91.7,35.1,-88.1],MT:[44.3,-116.1,49.1,-104],
+  NC:[33.8,-84.4,36.6,-75.4],ND:[45.9,-104.1,49.1,-96.5],NE:[39.9,-104.1,43.1,-95.3],NH:[42.6,-72.6,45.4,-70.6],
+  NJ:[38.9,-75.6,41.4,-73.9],NM:[31.3,-109.1,37.1,-103],NV:[35,-120.1,42.1,-114],NY:[40.4,-79.8,45.1,-71.8],
+  OH:[38.3,-84.9,42,-80.5],OK:[33.6,-103.1,37.1,-94.4],OR:[41.9,-124.6,46.3,-116.4],PA:[39.7,-80.6,42.3,-74.7],
+  RI:[41.1,-71.9,42.1,-71.1],SC:[32,-83.4,35.3,-78.5],SD:[42.4,-104.1,45.9,-96.4],TN:[34.9,-90.4,36.7,-81.6],
+  TX:[25.8,-106.7,36.6,-93.5],UT:[36.9,-114.1,42.1,-109],VA:[36.5,-83.7,39.5,-75.2],VT:[42.7,-73.5,45.1,-71.5],
+  WA:[45.5,-124.9,49.1,-116.9],WI:[42.4,-92.9,47.1,-86.8],WV:[37.1,-82.7,40.7,-77.7],WY:[40.9,-111.1,45.1,-104]
+};
+function statesInView(b) {
+  var out = [];
+  for (var st in STATE_BBOX) {
+    var q = STATE_BBOX[st];
+    if (!(q[2] < b.getSouth() || q[0] > b.getNorth() || q[3] < b.getWest() || q[1] > b.getEast())) out.push(st);
+  }
+  return out.slice(0, 6);   // cap the number of network fetches
+}
+function loadMetar() {
+  metarLayer.clearLayers();
+  if (!document.getElementById("c-metar").checked) return;
+  var b = map.getBounds(), states = statesInView(b);
+  Promise.all(states.map(function (st) {
+    return fetchGeo("https://mesonet.agron.iastate.edu/api/1/currents.geojson?network=" + st + "_ASOS", 300000);
+  })).then(function (results) {
+    if (!document.getElementById("c-metar").checked) return;
+    var feats = [];
+    results.forEach(function (j) { if (j && j.features) feats = feats.concat(j.features); });
+    feats = feats.filter(function (f) {
+      var p = f.properties; if (!p || p.tmpf == null || p.lat == null) return false;
+      return p.lat >= b.getSouth() && p.lat <= b.getNorth() && p.lon >= b.getWest() && p.lon <= b.getEast();
+    });
+    var placed = [];
+    feats.forEach(function (f) {
+      var p = f.properties, pt = map.latLngToContainerPoint([p.lat, p.lon]);
+      var box = { x1: pt.x - 20, y1: pt.y - 14, x2: pt.x + 20, y2: pt.y + 14 };
+      for (var i = 0; i < placed.length; i++) {
+        var q = placed[i];
+        if (!(box.x2 < q.x1 || box.x1 > q.x2 || box.y2 < q.y1 || box.y1 > q.y2)) return;
+      }
+      placed.push(box);
+      metarLayer.addLayer(makeMetarMarker(p, [p.lat, p.lon]));
+    });
+  }).catch(function () {});
+}
+function makeMetarMarker(p, latlng) {
+  var arrow = (p.drct != null && p.sknt != null && p.sknt > 0)
+    ? '<span class="mw" style="transform:rotate(' + ((p.drct + 180) % 360) + 'deg)">&#8593;</span>' : "";
+  var html = '<div class="metar"><span class="mt">' + Math.round(p.tmpf) + '&deg;</span>' + arrow + '</div>';
+  return L.marker(latlng, { pane:"metar", icon: L.divIcon({ className:"metarwrap", iconSize:[0,0], html:html }) })
+    .bindPopup("<b>" + esc(p.station) + "</b> " + esc(p.name || "") +
+      "<br>T " + Math.round(p.tmpf) + "&deg;F&nbsp;·&nbsp;Td " + (p.dwpf != null ? Math.round(p.dwpf) : "—") + "&deg;F" +
+      "<br>wind " + esc(p.drct) + "&deg; @ " + esc(p.sknt) + " kt" + (p.gust ? " G" + esc(p.gust) : "") +
+      (p.wxcodes ? "<br>wx: " + esc(p.wxcodes) : "") + '<br><small>' + esc(p.raw || "") + "</small>");
+}
+
 /* ===================== STORM PANEL TABS ===================== */
 function showTab(which) {
   var isText = which === "text", isAlerts = which === "alerts", isTable = !isText && !isAlerts;
@@ -1442,14 +1607,18 @@ document.getElementById("refresh").addEventListener("click", function () {
   var src = document.getElementById("product").options[document.getElementById("product").selectedIndex].getAttribute("data-src");
   if (src === "rv") loadRainViewer();
   else if (src === "precip") applyProduct();          // re-request the MRMS layer
-  eetCache = {}; alertsCache = null;                   // force-refresh cached Level III + alerts
+  eetCache = {}; alertsCache = null; geoCache = {};    // force-refresh cached Level III + alerts + vectors
   loadWarnings();
+  loadOutlook(); loadWatches(); loadMetar();          // no-ops when their toggles are off
 });
 
 var moveTimer = null;
 map.on("moveend", function () {
   clearTimeout(moveTimer);
-  moveTimer = setTimeout(loadWarnings, 500);   // refresh in-view cells after panning
+  moveTimer = setTimeout(function () {
+    loadWarnings();                                       // in-view storm cells + tops
+    if (document.getElementById("c-metar").checked) loadMetar();   // in-view surface obs
+  }, 500);
 });
 map.on("popupclose", function () { alertHoverLayer.clearLayers(); });   // drop any picker hover preview
 

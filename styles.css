@@ -339,6 +339,25 @@ table.storm tbody tr:hover { background: #dbe7ff; cursor: pointer; }
 .alertcard .atop { color: #b06a00; font-weight: bold; font-size: 10px; white-space: nowrap; }
 .alertcard .atopline { display: block; color: #7a4a00; font-weight: bold; margin-bottom: 2px; }
 
+/* METAR surface-obs station plots */
+.metarwrap { pointer-events: auto; }
+.metar { position: absolute; left: -14px; top: -8px; display: flex; align-items: center; gap: 2px;
+  font: bold 10px "Courier New", monospace; white-space: nowrap; }
+.metar .mt { color: #ff5a5a; text-shadow: 0 0 2px #000, 0 0 2px #000; }
+.metar .mw { color: #cfe3ff; font-size: 13px; line-height: 1; display: inline-block; text-shadow: 0 0 2px #000; }
+
+/* my-location marker */
+.myloc .mydot { display: block; width: 14px; height: 14px; border-radius: 50%;
+  background: #2f8fff; border: 2px solid #fff; box-shadow: 0 0 0 2px rgba(47,143,255,0.5), 0 0 5px #000;
+  animation: mylocpulse 1.4s ease-out infinite; }
+@keyframes mylocpulse { 0% { box-shadow: 0 0 0 2px rgba(47,143,255,0.6), 0 0 0 0 rgba(47,143,255,0.5); }
+  100% { box-shadow: 0 0 0 2px rgba(47,143,255,0.6), 0 0 0 14px rgba(47,143,255,0); } }
+
+/* tilt-viewer mode dropdown */
+#srvtool .srv-mode { margin-bottom: 7px; }
+#srvtool #srv-mode { width: 100%; font: 11px "Courier New", monospace; background: #1d5fb0; color: #fff;
+  border: 1px solid #3d82d6; border-radius: 3px; padding: 3px; }
+
 /* single-radar tilt viewer toolset (top-right) */
 #srvtool {
   position: absolute; z-index: 500; top: 8px; right: 8px; width: 148px;

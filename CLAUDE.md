@@ -187,6 +187,29 @@ stable alert id). `esc()` HTML-escapes all alert text. Verified live near KJKL: 
   the card header + a line in the detail). Verified live at KJKL: 43 callouts (▲48kft…), 43 table rows with
   tops, alert cards showing Tornado-Warning tops of 51-52 kft.
 
+## Added weather products/overlays (2026-07-21, all toggle-able)
+- **SPC Day-1 Convective Outlook** (`c-outlook`, `outlook` pane z340): `loadOutlook` fetches the SPC
+  categorical GeoJSON (`spc.noaa.gov/products/outlook/day1otlk_cat.nolyr.geojson`) — it ships its own
+  `stroke`/`fill` risk colors (TSTM/MRGL/SLGT/ENH/MDT/HIGH). Popup = risk label.
+- **SPC Watches** (`c-watches`, `watches` pane z385): `loadWatches` via IEM `spcwatch.py?fmt=geojson`
+  (CORS-open) — TOR=red / SVR=amber boxes; popup = number, PDS, hail/wind, expiry.
+- **Surface obs / METAR** (`c-metar`, `metar` pane z660): `loadMetar` — aviationweather.gov is NOT
+  CORS-open, so it uses IEM per-state `currents.geojson?network=XX_ASOS` (CORS `*`). A `STATE_BBOX`
+  table picks the ≤6 states overlapping the view; obs merged, filtered to view, **de-cluttered** (same
+  greedy screen-box overlap test as tops), rendered as temp°F + a rotated wind arrow (`makeMetarMarker`);
+  popup = T/Td/wind/gust/wx + raw METAR. Refetched on pan (moveend) when active.
+- **Air Mass RGB** satellite (product `WV`, GIBS `GOES-East_ABI_Air_Mass`) — water-vapor/dynamics (the
+  individual GIBS WV bands 400'd; Air Mass is the working moisture product).
+- **Dual-pol in the single-radar tilt viewer**: the mode picker is now a dropdown (`#srv-mode`) with
+  Reflectivity / Velocity / **Corr Coef (CC, N0C)** / **Diff Refl (ZDR, N0X)**. Encodings: CC = 0.2 +
+  (L−2)·0.00336 (`ccColor`: red<0.8 … blue≥0.98), ZDR = (L−2)·0.0625 − 7.875 dB (`zdrColor`). Decode reuses
+  the same bzip2 packet-16 path. Verified live CC + ZDR render (~17% cover) with their own legends.
+- **My location (GPS)** action button: `navigator.geolocation` → pulsing marker + setView + reload.
+- Force-refresh on "Reload data" clears `geoCache`/`eetCache`/`alertsCache` and reloads all vector layers.
+- NOT feasible keyless (reported, not added): national MRMS **MESH/VIL/rotation/echotop** grids (NCEP
+  OpenGeo serves only base+composite reflectivity); HRRR model radar; cross-section; VWP; SPC Mesoscale
+  Discussions (no reliable CORS GeoJSON found).
+
 ## Base vs Composite reflectivity (real products, not a color swap)
 Base and Composite were BOTH RainViewer/IEM before, so the LIVE view showed identical IEM n0q tiles →
 toggling did nothing (fixed 2026-07-21). Now the reflectivity "still" is product-aware (`showIem` +

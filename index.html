@@ -57,6 +57,7 @@
             <optgroup label="Satellite (GOES-East)">
               <option value="IR" data-src="sat" data-sat="ir">Infrared (cloud tops)</option>
               <option value="VIS" data-src="sat" data-sat="vis">GeoColor (visible)</option>
+              <option value="WV" data-src="sat" data-sat="wv">Air Mass RGB (water vapor / dynamics)</option>
             </optgroup>
             <optgroup label="Precipitation (MRMS QPE)">
               <option value="P1H" data-src="precip" data-rule="rft_1hr">Precip rate &mdash; 1&nbsp;hr (in)</option>
@@ -122,6 +123,9 @@
         <div class="checkline"><input type="checkbox" id="c-cells" checked><label for="c-cells">Storm-cell markers</label></div>
         <div class="checkline"><input type="checkbox" id="c-tracks" checked><label for="c-tracks">Level III forecast tracks</label></div>
         <div class="checkline"><input type="checkbox" id="c-tops"><label for="c-tops">Storm-top callouts (EET)</label></div>
+        <div class="checkline"><input type="checkbox" id="c-watches"><label for="c-watches">SPC watches (TOR/SVR)</label></div>
+        <div class="checkline"><input type="checkbox" id="c-outlook"><label for="c-outlook">SPC convective outlook</label></div>
+        <div class="checkline"><input type="checkbox" id="c-metar"><label for="c-metar">Surface obs (METAR)</label></div>
         <div class="checkline"><input type="checkbox" id="c-sites" checked><label for="c-sites">Radar site icons</label></div>
         <div class="checkline"><input type="checkbox" id="c-iem"><label for="c-iem">Force IEM true-dBZ still</label></div>
         <div class="row" style="margin-top:6px">
@@ -136,6 +140,7 @@
       <div class="body">
         <button class="act" id="refresh">Reload data</button>
         <button class="act" id="recenter">Center on site</button>
+        <button class="act" id="mylocation">My location (GPS)</button>
         <button class="act" id="view3d">3D volumetric view</button>
         <p class="hint" id="datastatus">Initializing&hellip;</p>
       </div>
