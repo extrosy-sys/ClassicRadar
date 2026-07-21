@@ -352,6 +352,9 @@ table.storm tbody tr:hover { background: #dbe7ff; cursor: pointer; }
   animation: mylocpulse 1.4s ease-out infinite; }
 @keyframes mylocpulse { 0% { box-shadow: 0 0 0 2px rgba(47,143,255,0.6), 0 0 0 0 rgba(47,143,255,0.5); }
   100% { box-shadow: 0 0 0 2px rgba(47,143,255,0.6), 0 0 0 14px rgba(47,143,255,0); } }
+/* approximate (IP-based) location: amber, non-pulsing to signal lower precision */
+.myloc.approx .mydot { background: #e8a200; border-color: #fff;
+  box-shadow: 0 0 0 2px rgba(232,162,0,0.5), 0 0 5px #000; animation: none; }
 
 /* tilt-viewer mode dropdown */
 #srvtool .srv-mode { margin-bottom: 7px; }

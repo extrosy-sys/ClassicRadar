@@ -216,7 +216,11 @@ across a reload and re-apply (composite tiles load, watches draw, labels hidden)
   Reflectivity / Velocity / **Corr Coef (CC, N0C)** / **Diff Refl (ZDR, N0X)**. Encodings: CC = 0.2 +
   (L−2)·0.00336 (`ccColor`: red<0.8 … blue≥0.98), ZDR = (L−2)·0.0625 − 7.875 dB (`zdrColor`). Decode reuses
   the same bzip2 packet-16 path. Verified live CC + ZDR render (~17% cover) with their own legends.
-- **My location (GPS)** action button: `navigator.geolocation` → pulsing marker + setView + reload.
+- **My location (GPS)** action button: `navigator.geolocation` → pulsing blue marker + setView + reload.
+  **IP fallback** (`ipLocate`): if the GPS API is missing OR getCurrentPosition errors/denies/times out, it
+  falls through to keyless CORS-open IP geolocation (tries ipapi.co → geojs.io → ipwho.is in order) and drops
+  a non-pulsing amber "approx" marker. Verified: GPS-fail → IP → "Approx location (Minneapolis) via IP ·
+  nearest radar KMPX".
 - Force-refresh on "Reload data" clears `geoCache`/`eetCache`/`alertsCache` and reloads all vector layers.
 - NOT feasible keyless (reported, not added): national MRMS **MESH/VIL/rotation/echotop** grids (NCEP
   OpenGeo serves only base+composite reflectivity); HRRR model radar; cross-section; VWP; SPC Mesoscale

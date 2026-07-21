@@ -1099,20 +1099,40 @@ document.getElementById("site").addEventListener("change", function () {
 document.getElementById("recenter").addEventListener("click", centerOnSite);
 
 var myLocMarker = null;
+function goToMyLocation(lat, lon, approx, place) {
+  if (myLocMarker) map.removeLayer(myLocMarker);
+  myLocMarker = L.marker([lat, lon], { pane:"cells", icon: L.divIcon({
+    className:"myloc" + (approx ? " approx" : ""), iconSize:[16,16], iconAnchor:[8,8], html:'<span class="mydot"></span>' }) }).addTo(map);
+  map.setView([lat, lon], Math.max(map.getZoom(), approx ? 8 : 9));   // loadWarnings picks the in-view radars
+  var n = nearestSite(lat, lon);
+  loadWarnings();
+  if (document.getElementById("c-metar").checked) loadMetar();
+  setStatus((approx ? "Approx location" + (place ? " (" + place + ")" : "") + " via IP" : "Located you") +
+    (n ? " · nearest radar " + n.id : "") + ".");
+}
+/* IP-based geolocation fallback (keyless, CORS-open; tries a few providers in order) */
+var IP_GEO = [
+  { url:"https://ipapi.co/json/", lat:"latitude", lon:"longitude" },
+  { url:"https://get.geojs.io/v1/ip/geo.json", lat:"latitude", lon:"longitude" },
+  { url:"https://ipwho.is/", lat:"latitude", lon:"longitude" }
+];
+function ipLocate(i) {
+  i = i || 0;
+  if (i >= IP_GEO.length) { setStatus("Couldn't determine your location (GPS + IP lookup failed)."); return; }
+  var s = IP_GEO[i];
+  fetch(s.url).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+    var lat = j && parseFloat(j[s.lat]), lon = j && parseFloat(j[s.lon]);
+    if (j && isFinite(lat) && isFinite(lon)) goToMyLocation(lat, lon, true, j.city || j.region || "");
+    else ipLocate(i + 1);
+  }).catch(function () { ipLocate(i + 1); });
+}
 document.getElementById("mylocation").addEventListener("click", function () {
-  if (!navigator.geolocation) { setStatus("Geolocation isn't available in this browser."); return; }
   setStatus("Locating…");
-  navigator.geolocation.getCurrentPosition(function (pos) {
-    var lat = pos.coords.latitude, lon = pos.coords.longitude;
-    if (myLocMarker) map.removeLayer(myLocMarker);
-    myLocMarker = L.marker([lat, lon], { pane:"cells", icon: L.divIcon({
-      className:"myloc", iconSize:[16,16], iconAnchor:[8,8], html:'<span class="mydot"></span>' }) }).addTo(map);
-    map.setView([lat, lon], Math.max(map.getZoom(), 9));   // loadWarnings picks the in-view radars
-    var n = nearestSite(lat, lon);
-    loadWarnings();
-    if (document.getElementById("c-metar").checked) loadMetar();
-    setStatus("Located you" + (n ? " · nearest radar " + n.id : "") + ".");
-  }, function (err) { setStatus("Location error: " + err.message); }, { enableHighAccuracy:false, timeout:10000, maximumAge:60000 });
+  if (!navigator.geolocation) { ipLocate(); return; }   // no GPS API -> straight to IP
+  navigator.geolocation.getCurrentPosition(
+    function (pos) { goToMyLocation(pos.coords.latitude, pos.coords.longitude, false); },
+    function () { setStatus("GPS unavailable — trying IP lookup…"); ipLocate(); },   // denied / timeout / error -> IP
+    { enableHighAccuracy:false, timeout:8000, maximumAge:60000 });
 });
 document.getElementById("view3d").addEventListener("click", function () {
   var c = map.getCenter();
