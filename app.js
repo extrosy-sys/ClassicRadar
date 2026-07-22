@@ -742,10 +742,11 @@ var WARN_URL = "https://api.weather.gov/alerts/active?status=actual&message_type
   "&event=Tornado%20Warning&event=Severe%20Thunderstorm%20Warning" +
   "&event=Flash%20Flood%20Warning&event=Special%20Marine%20Warning";
 
-/* below this zoom, storm tracks/cells clutter into each other — hide Level III entirely
-   (and skip the multi-radar fetches). Tracks come from EVERY WSR-88D whose site sits in
-   view (up to MAX_L3_SITES nearest the centre), so a whole storm field is covered, not one radar. */
-var TRACK_MIN_ZOOM = 7;
+/* below this zoom we stop fetching Level III entirely. Between here and z7 the storm field is
+   drawn SPARSE (only significant / warning-linked / TVS cells + tracks) so it stays readable;
+   z7+ fills in. Tracks come from up to MAX_L3_SITES WSR-88D sites nearest the map centre. */
+var TRACK_MIN_ZOOM = 5;
+var SPARSE_ZOOM = 7;         // below this, show only significant cells/tracks
 var MAX_L3_SITES = 5;
 var l3Cache = {};   // site3 -> { t, result } (3-min TTL, so panning doesn't refetch)
 
@@ -843,6 +844,7 @@ function renderStorm(features, l3List, eetBySite) {
   //   z7: only significant (warning-linked / TVS) tracks, no ticks · below z7: none (data gated)
   var trackTicks = z >= 9;
   var trackAllCells = z >= 8;
+  var sparse = z < SPARSE_ZOOM;    // zoomed way out -> only significant cells' markers/tracks
   var rows = [];
 
   // 1) Level III cells from every in-view radar (only those within the padded view)
@@ -936,7 +938,8 @@ function renderStorm(features, l3List, eetBySite) {
         marker.on("mouseout", function(){ hoverCell(key, false); });
       })(r.key);
       cellMarkers.push(marker);
-      if (document.getElementById("c-cells").checked) marker.addTo(map);
+      // zoomed way out, only show significant (warning-linked / TVS) cell markers so it stays readable
+      if (document.getElementById("c-cells").checked && (!sparse || r.threat !== "cell" || r.tvs)) marker.addTo(map);
     }
     cellRefs[r.key] = { marker:marker, poly:r._poly || null, color:r._color || "#4a6ea9", center:r.center };
   });
@@ -1210,7 +1213,7 @@ var SEV_RANK = { Extreme:0, Severe:1, Moderate:2, Minor:3, Unknown:4 };
 function alertColor(sev){ return SEV_COLOR[sev] || SEV_COLOR.Unknown; }
 function esc(s){ return (s == null ? "" : String(s)).replace(/[&<>"]/g, function (c){
   return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]; }); }
-function fmtLocal(d){ try { return d.toLocaleString([], { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" }); } catch(e){ return ""; } }
+function fmtLocal(d){ try { return d.toLocaleString([], { month:"short", day:"numeric", hour:"numeric", minute:"2-digit", timeZoneName:"short" }); } catch(e){ return ""; } }
 
 function fetchAllAlertsCached() {
   // active alerts change slowly; cache the ~2 MB national list 3 min so panning re-filters
@@ -1297,9 +1300,13 @@ function buildAlertsTable() {
       '</div></div>';
   }).join("");
   body.querySelectorAll(".alertcard").forEach(function (c) {
+    var i = parseInt(c.getAttribute("data-aid"), 10);
     c.querySelector(".ah").addEventListener("click", function () {
-      selectAlert(parseInt(c.getAttribute("data-aid"), 10), false);
+      if (c.classList.contains("open")) collapseAlert();      // click an open card -> collapse it
+      else selectAlert(i, false);
     });
+    c.addEventListener("mouseenter", function () { hoverAlert(i, true); });   // hover -> highlight its area
+    c.addEventListener("mouseleave", function () { hoverAlert(i, false); });
   });
   annotateAlertTops();
 }
@@ -1347,6 +1354,12 @@ function selectAlert(i, fromMap) {
   var card = Pq('.alertcard[data-aid="' + i + '"]');
   if (card) card.scrollIntoView({ block:"nearest" });
   if (isMobile() && fromMap && !panelWin) document.getElementById("mapwrap").scrollIntoView({ behavior:"smooth", block:"start" });
+}
+/* collapse the open alert card + drop its persistent map highlight */
+function collapseAlert() {
+  selectedAlertUid = null;
+  alertSelLayer.clearLayers();
+  panelDoc.querySelectorAll(".alertcard.open").forEach(function (c) { c.classList.remove("open"); });
 }
 
 /* ---- point-in-polygon hit test so overlapping alert areas can be disambiguated ---- */

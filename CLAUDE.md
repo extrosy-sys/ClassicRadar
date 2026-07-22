@@ -139,6 +139,19 @@ toolset** (`#srvtool`) to slide through the tilts, toggle the product, and close
   Verified live at KJKL: z9 = 39 paths/21 ticks, z8 = 84 paths/0 ticks, z7 = tracks thinned to the
   significant few. `TRACK_MIN_ZOOM`=7 still gates the Level III fetch.
 
+## Alerts UX + sparse low-zoom tracks (2026-07-21)
+- **Expiry timezone**: `fmtLocal` now includes `timeZoneName:"short"` → alert card expiries render in the
+  viewer's local zone with the label (e.g. "Jul 21, 7:45 PM CDT"/EDT). Storm-table expiry stays UTC ("…Z").
+- **Alert card collapse**: clicking an already-open card now collapses it (`collapseAlert` clears the open
+  class + the persistent `alertSelLayer` highlight); clicking a closed one still opens/selects it.
+- **Alert card hover → highlight**: `mouseenter`/`mouseleave` on each card call `hoverAlert(i)` (the same
+  bold outline the overlap-picker uses, on `alertHoverLayer`), so hovering an alert shows exactly where it is.
+- **Sparse storm field when zoomed out**: `TRACK_MIN_ZOOM` 7→5 and new `SPARSE_ZOOM`=7. Below z7 the field
+  is drawn SPARSE — only significant (warning-linked / TVS) cell markers AND tracks (`sparse = z<SPARSE_ZOOM`
+  gates the marker `addTo`; tracks already went significant-only below z8) — so tracks no longer vanish when
+  zoomed out, they thin. Below z5 Level III still isn't fetched. (Verified z8 unchanged; the automated pane
+  went zoom-frozen so z5–6 sparse wasn't visually re-confirmed, but the path is a simple threshold gate.)
+
 ## Verbose weather-alerts table (map-linked)
 Third storm-panel tab **"Alerts (N)"** (beside Storm Attribute Table / Level III Text): every active NWS
 alert — all event types (warnings, watches, advisories, statements) — whose polygon intersects the view,
