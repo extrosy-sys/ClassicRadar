@@ -71,6 +71,8 @@
               <option value="MVIL" data-src="mrms" data-mrms="vil" class="srvopt" disabled>&#9670; VIL grid (kg/m&sup2;)</option>
               <option value="MROT" data-src="mrms" data-mrms="rot" class="srvopt" disabled>&#9670; Rotation tracks &mdash; 60 min</option>
               <option value="MLTG" data-src="mrms" data-mrms="ltg" class="srvopt" disabled>&#9670; Lightning &mdash; CG strikes (NLDN)</option>
+              <option value="MQPE" data-src="mrms" data-mrms="qpe" class="srvopt" disabled>&#9670; Rainfall last 1 h (QPE, mm)</option>
+              <option value="MH24" data-src="mrms" data-mrms="mesh24" class="srvopt" disabled>&#9670; Hail swath &mdash; 24 h max</option>
             </optgroup>
             <optgroup label="Volumetric (open 3D)">
               <option value="V-REF" data-src="d3" data-prod="refl">Reflectivity tilts &rarr; 3D</option>
@@ -141,6 +143,8 @@
         <div class="checkline"><input type="checkbox" id="c-tops"><label for="c-tops">Storm-top callouts (EET)</label></div>
         <div class="checkline"><input type="checkbox" id="c-watches"><label for="c-watches">SPC watches (TOR/SVR)</label></div>
         <div class="checkline"><input type="checkbox" id="c-outlook"><label for="c-outlook">SPC convective outlook</label></div>
+        <div class="checkline"><input type="checkbox" id="c-mcd"><label for="c-mcd">SPC mesoscale discussions</label></div>
+        <div class="checkline"><input type="checkbox" id="c-tropical"><label for="c-tropical">Tropical &mdash; NHC cones/tracks<span class="srvtag" id="tag-tropical"></span></label></div>
         <div class="checkline"><input type="checkbox" id="c-metar"><label for="c-metar">Surface obs (METAR)<span class="srvtag" id="tag-metar"></span></label></div>
         <div class="checkline"><input type="checkbox" id="c-sites" checked><label for="c-sites">Radar site icons</label></div>
         <div class="checkline"><input type="checkbox" id="c-iem"><label for="c-iem">Force IEM true-dBZ still</label></div>
@@ -227,6 +231,12 @@
       <span>frame</span>
       <input type="range" id="scrub" min="0" max="0" value="0">
       <span id="looprange"></span><span id="frameidx">0/0</span>
+      <span id="histwrap" style="display:none"
+            title="Loop end time &mdash; drag left to replay any window from the last 24 h (&#9670; server archive). &#9673; LIVE snaps back to now.">
+        <span class="histcap">end</span>
+        <input type="range" id="histend" min="0" max="0" value="0">
+        <span id="histlabel">now</span>
+      </span>
     </div>
 
     <div id="tableresize" title="Drag to resize"><span class="grip"></span></div>

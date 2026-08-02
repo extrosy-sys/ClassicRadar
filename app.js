@@ -45,8 +45,10 @@ function pane(name, z) { map.createPane(name); map.getPane(name).style.zIndex = 
 pane("radar", 250);
 pane("velocity", 260);
 pane("outlook", 340);         // SPC convective-outlook risk areas (background)
+pane("tropical", 344);        // NHC cones/tracks/points (background, above outlook)
 pane("clutter", 350);
 pane("alerts", 380);
+pane("mcd", 383);             // SPC mesoscale-discussion areas
 pane("watches", 385);         // SPC watch boxes
 pane("warn", 400);
 pane("sites", 500);
@@ -218,6 +220,7 @@ function srvSetState(url, health) {
   SRV.mrms = (health && health.caps && health.caps.mrms) || [];
   SRV.synoptic = !!(health && health.caps && health.caps.synoptic);
   SRV.comp = (health && health.caps && health.caps.composite) || null;
+  SRV.tropical = !!(health && health.caps && health.caps.tropical);
   var badge = document.getElementById("srvbadge");
   if (badge) {
     badge.style.display = SRV.up ? "" : "none";
@@ -236,6 +239,18 @@ function srvSetState(url, health) {
     mt.title = SRV.up ? (SRV.synoptic ? "Dense mesonet obs (Synoptic) via the enhancement server"
                                       : "Obs from aviationweather.gov via the enhancement server") : "";
   }
+  // tropical overlay is server-provided (NHC CurrentStorms has no CORS keyless)
+  var tcb = document.getElementById("c-tropical");
+  var tt = document.getElementById("tag-tropical");
+  var tropOk = SRV.up && SRV.tropical;
+  if (tcb) tcb.disabled = !tropOk;
+  if (tt) {
+    tt.textContent = tropOk ? "◆" : "◆ needs server";
+    tt.title = tropOk ? "NHC storms/cones/tracks via the enhancement server" : "Needs the enhancement server";
+  }
+  if (tropOk && !wasUp) loadTropical();
+  if (!tropOk) tropicalLayer.clearLayers();
+  updateHistControl();               // 24-h loop-end scrubbing is a server feature too
   var st = document.getElementById("server-status");
   if (st) {
     st.textContent = SRV.up ? "◆ Connected: " + url + " — " + srvCapsSummary()
@@ -601,10 +616,12 @@ function makeCompBuffers(attribution) {
   }
   loopMode = "comp";
 }
-/* frame URL template for the active mode; composite needs no {z}/{x}/{y} */
+/* frame URL template for the active mode; composite needs no {z}/{x}/{y}.
+   NOTE the composite route takes the BARE product id ("/frame/qpe/…", not "/frame/mrms/qpe/…")
+   — the "mrms/" prefix belongs only to the tile routes. */
 function frameUrlFor(prodPath, ts) {
   return useComposite()
-    ? SRV.url + "/frame/" + prodPath + "/" + ts + ".png"
+    ? SRV.url + "/frame/" + prodPath.replace("mrms/", "") + "/" + ts + ".png"
     : SRV.url + "/tiles/" + prodPath + (prodPath.indexOf("mrms/") === 0 ? "/at/" : "/") + ts + "/{z}/{x}/{y}.png";
 }
 
@@ -685,9 +702,9 @@ function loadSatLoop() {
   if (SRV.up) {
     // server-validated list: GIBS's per-timestamp holes are removed up front, and asking
     // also kicks the server's warm + composite pre-builders for these exact frames
-    listP = fetch(SRV.url + "/api/frames?product=" + kind + "&hours=" + spec.h + "&step=" + spec.step)
+    listP = fetch(SRV.url + "/api/frames?product=" + kind + "&hours=" + (loopEndTs ? 24 : spec.h) + "&step=" + spec.step)
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-      .then(function (j) { return (j.frames || []).map(tsToUnix); })
+      .then(function (j) { return applyEndPin(j.frames || [], spec).map(tsToUnix); })
       .catch(function () { srvFail(); return null; });
   } else listP = Promise.resolve(null);
   return listP.then(function (list) {
@@ -711,7 +728,7 @@ function loadSatLoop() {
     else makeBuffers(g.maxNative, "Satellite &copy; NASA GIBS / NOAA GOES-East", "GOES loop");
     curFrame = frameUrls.length - 1;
     wireScrub();
-    goLive();
+    if (loopEndTs) showFrame(curFrame); else goLive();
     return true;
   });
 }
@@ -727,12 +744,12 @@ function loadMrmsLoop() {
   var sel = document.getElementById("product");
   var id = sel.options[sel.selectedIndex].getAttribute("data-mrms");
   var spec = loopSpec(10);
-  return fetch(SRV.url + "/api/frames?product=" + id + "&hours=" + spec.h + "&step=" + spec.step)
+  return fetch(SRV.url + "/api/frames?product=" + id + "&hours=" + (loopEndTs ? 24 : spec.h) + "&step=" + spec.step)
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(function (j) {
       if (req !== loopReq) return false;
       clearFrames();
-      var list = j.frames || [];
+      var list = applyEndPin(j.frames || [], spec);
       if (spec.take && list.length > spec.take) list = list.slice(-spec.take);
       list.forEach(function (ts) {
         frameUrls.push(frameUrlFor("mrms/" + id, ts));
@@ -742,19 +759,19 @@ function loadMrmsLoop() {
       else makeBuffers(9, "MRMS &copy; NOAA/NSSL via enhancement server", "MRMS loop");
       curFrame = frameUrls.length - 1;
       wireScrub();
-      goLive();
+      if (loopEndTs) showFrame(curFrame); else goLive();
       return true;
     })
     .catch(function () { srvFail(); return false; });
 }
 function loadServerLoop(conf) {
   var req = ++loopReq;
-  return fetch(SRV.url + "/api/frames?hours=" + conf.h + "&step=" + conf.step)
+  return fetch(SRV.url + "/api/frames?hours=" + (loopEndTs ? 24 : conf.h) + "&step=" + conf.step)
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(function (j) {
       if (req !== loopReq) return false;   // a newer loop load superseded this one
       clearFrames();
-      var list = j.frames || [];
+      var list = applyEndPin(j.frames || [], conf);
       if (conf.take && list.length > conf.take) list = list.slice(-conf.take);
       list.forEach(function (ts) {
         frameUrls.push(frameUrlFor("n0q", ts));
@@ -764,7 +781,7 @@ function loadServerLoop(conf) {
       else makeBuffers(12, "Radar archive &copy; IEM via enhancement server", "Server loop");
       curFrame = frameUrls.length - 1;
       wireScrub();
-      goLive();
+      if (loopEndTs) showFrame(curFrame); else goLive();
       return true;
     })
     .catch(function () {
@@ -889,6 +906,72 @@ function wireScrub() {
   if (lr) lr.title = srvLoop ? "Loop frames served/cached by the enhancement server" : "Loop frames fetched directly (keyless)";
 }
 
+/* ---- ◆ loop-end pin ("time machine"): scrub the loop's END to any point in the server's
+   24-h archive. Pinned = the loop covers the same-length window ending there, the last frame
+   shows paused, and the pin survives product switches (radar@3pm ↔ satellite@3pm). ---- */
+var loopEndTs = null;      // "YYYYMMDDHHMM" (UTC) end-of-loop pin; null = live edge
+var histStamps = [];       // available 24-h stamps for the current product (slider domain)
+
+/* keep frames at/before the pin, then trim to the loop's window size */
+function applyEndPin(list, spec) {
+  if (!loopEndTs) return list;
+  var out = [];
+  for (var i = 0; i < list.length; i++) if (list[i] <= loopEndTs) out.push(list[i]);
+  var take = spec.take || Math.floor(spec.h * 60 / spec.step) + 1;
+  return out.length > take ? out.slice(-take) : out;
+}
+function histApiId() {     // /api/frames product id for the active product (null = not loopable)
+  var src = currentProductSrc();
+  var sel = document.getElementById("product");
+  var opt = sel.options[sel.selectedIndex];
+  if (src === "rv") return "n0q";
+  if (src === "sat") return opt.getAttribute("data-sat");
+  if (src === "mrms") return opt.getAttribute("data-mrms");
+  return null;
+}
+function updateHistControl() {
+  var w = document.getElementById("histwrap");
+  if (!w) return;
+  var id = SRV.up ? histApiId() : null;
+  if (!id) { w.style.display = "none"; loopEndTs = null; histStamps = []; return; }
+  w.style.display = "";
+  fetch(SRV.url + "/api/frames?product=" + id + "&hours=24&step=" + (id === "n0q" ? 15 : 10))
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function (j) { histStamps = j.frames || []; histSync(); })
+    .catch(function () { w.style.display = "none"; });
+}
+function histSync() {      // point the slider at the pin (or the live edge) + label
+  var s = document.getElementById("histend");
+  if (!s) return;
+  s.max = Math.max(0, histStamps.length - 1);
+  var idx = histStamps.length - 1;
+  if (loopEndTs) {
+    idx = 0;
+    while (idx < histStamps.length - 1 && histStamps[idx] < loopEndTs) idx++;
+  }
+  s.value = idx;
+  histShowLabel();
+}
+function histShowLabel() {
+  var s = document.getElementById("histend"), el = document.getElementById("histlabel");
+  if (!s || !el) return;
+  var i = +s.value;
+  var atLive = !histStamps.length || i >= histStamps.length - 1;
+  el.textContent = atLive ? "now" : fmtStamp(new Date(tsToUnix(histStamps[i]) * 1000)).slice(11);
+  el.className = atLive ? "" : "pinned";
+}
+(function () {
+  var s = document.getElementById("histend");
+  if (!s) return;
+  s.addEventListener("input", histShowLabel);                 // live label while dragging
+  s.addEventListener("change", function () {                  // commit on release
+    var i = +s.value;
+    loopEndTs = (!histStamps.length || i >= histStamps.length - 1) ? null : histStamps[i];
+    histShowLabel();
+    loadRainViewer();
+  });
+})();
+
 function tick() {
   if (curFrame === frameUrls.length - 1 && dwellLeft > 0) { dwellLeft--; return; }
   var next = curFrame + 1;
@@ -984,6 +1067,7 @@ function applyProduct() {
     document.getElementById("stamp").textContent = "product n/a";
   }
   syncIem();   // hide auto-IEM for non-reflectivity products (unless manually forced on)
+  updateHistControl();   // the ◆ loop-end scrub follows the product (24-h stamp list per source)
 }
 function setPlaybar(on) {
   ["live","pp","step-b","step-f","scrub"].forEach(function (id) {
@@ -1164,6 +1248,8 @@ var alertHoverLayer = L.layerGroup([], { pane:"warn" }).addTo(map);   // picker 
 var topsLayer = L.layerGroup([], { pane:"tops" }).addTo(map);         // storm-top callouts (toggle)
 var outlookLayer = L.layerGroup([], { pane:"outlook" }).addTo(map);   // SPC convective outlook (toggle)
 var watchesLayer = L.layerGroup([], { pane:"watches" }).addTo(map);   // SPC watch boxes (toggle)
+var mcdLayer = L.layerGroup([], { pane:"mcd" }).addTo(map);           // SPC mesoscale discussions (toggle)
+var tropicalLayer = L.layerGroup([], { pane:"tropical" }).addTo(map); // NHC tropical (toggle, ◆ server)
 var metarLayer = L.layerGroup([], { pane:"metar" }).addTo(map);       // METAR surface obs (toggle)
 var lastL3 = null;
 
@@ -1615,7 +1701,11 @@ document.getElementById("frames").addEventListener("change", function () {
 });
 document.getElementById("speed").addEventListener("change", function () { if (playing) play(); });
 
-document.getElementById("live").addEventListener("click", function () { pause(); goLive(); });
+document.getElementById("live").addEventListener("click", function () {
+  pause();
+  if (loopEndTs) { loopEndTs = null; histSync(); loadRainViewer(); }   // unpin -> rebuild live window
+  goLive();
+});
 document.getElementById("pp").addEventListener("click", function () { playing ? pause() : play(); });
 document.getElementById("step-f").addEventListener("click", function () { pause(); showFrame(curFrame + 1); });
 document.getElementById("step-b").addEventListener("click", function () { pause(); showFrame(curFrame - 1); });
@@ -1653,6 +1743,8 @@ document.getElementById("c-tracks").addEventListener("change", function () {
 document.getElementById("c-tops").addEventListener("change", function () { loadWarnings(); });
 document.getElementById("c-outlook").addEventListener("change", loadOutlook);
 document.getElementById("c-watches").addEventListener("change", loadWatches);
+document.getElementById("c-mcd").addEventListener("change", loadMcd);
+document.getElementById("c-tropical").addEventListener("change", loadTropical);
 document.getElementById("c-metar").addEventListener("change", loadMetar);
 document.getElementById("c-iem").addEventListener("change", syncIem);
 map.on("zoomend", syncIem);
@@ -1968,6 +2060,112 @@ function loadWatches() {
   });
 }
 
+/* SPC Mesoscale Discussions — the pre-watch "heads-up" product (keyless via IEM, CORS-open).
+   Only currently-VALID MDs draw (the feed returns everything issued in the window). */
+var MCD_URL = "https://mesonet.agron.iastate.edu/api/1/nws/spc_mcd.geojson?hours=6";
+function loadMcd() {
+  mcdLayer.clearLayers();
+  if (!document.getElementById("c-mcd").checked) return;
+  fetchGeo(MCD_URL, 300000).then(function (j) {
+    if (!j || !document.getElementById("c-mcd").checked) return;
+    var now = Date.now();
+    (j.features || []).forEach(function (f) {
+      var p = f.properties || {};
+      if (p.expire && Date.parse(p.expire) < now) return;      // expired MD
+      var conf = p.watch_confidence;
+      L.geoJSON(f.geometry, { pane:"mcd", style:{ color:"#c8783c", weight:2, fill:true,
+        fillColor:"#c8783c", fillOpacity:0.07, dashArray:"2 6" } })
+        .bindPopup("<b>SPC Mesoscale Discussion #" + esc(p.num) + "</b>" +
+          "<br>" + esc(p.concerning || "") +
+          (conf != null ? "<br>watch confidence: " + esc(conf) + "%" : "") +
+          "<br>valid until " + esc((p.expire || "").replace("T", " ").replace(":00Z", "Z")) +
+          '<br><a href="https://www.spc.noaa.gov/products/md/md' + esc(p.num) +
+          '.html" target="_blank" rel="noopener">full discussion &rarr;</a>')
+        .addTo(mcdLayer);
+    });
+  });
+}
+
+/* NHC tropical overlay (◆ server: CurrentStorms.json has no CORS keyless) — forecast cones,
+   tracks, D/S/H/M forecast points, watch/warning coastlines, 7-day development areas. */
+var TROP_WW = { HWR:"#e01f1f", HWA:"#ff7bbf", TWR:"#2e7cd8", TWA:"#f7e01a" };
+var TROP_WW_LBL = { HWR:"Hurricane Warning", HWA:"Hurricane Watch", TWR:"Trop. Storm Warning", TWA:"Trop. Storm Watch" };
+var TROP_CLASS = { HU:"Hurricane", TS:"Tropical Storm", TD:"Tropical Depression", PTC:"Post-Tropical Cyclone",
+                   STD:"Subtropical Depression", STS:"Subtropical Storm", PC:"Potential Tropical Cyclone" };
+var tropCache = null, tropFetched = 0;
+function tropPtColor(dvlbl) {
+  return dvlbl === "M" ? "#c81ac8" : dvlbl === "H" ? "#f0401a" : dvlbl === "S" ? "#e8a200" : "#4aa8d8";
+}
+function loadTropical() {
+  tropicalLayer.clearLayers();
+  var cb = document.getElementById("c-tropical");
+  if (!cb || !cb.checked || !SRV.up || !SRV.tropical) return;
+  var p = (tropCache && Date.now() - tropFetched < 600000)
+    ? Promise.resolve(tropCache)
+    : fetch(SRV.url + "/api/tropical")
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (j) { tropCache = j; tropFetched = Date.now(); return j; })
+        .catch(function () { srvFail(); return tropCache; });
+  p.then(function (j) {
+    if (!j || !document.getElementById("c-tropical").checked) return;
+    var feats = (j.features && j.features.features) || [];
+    feats.forEach(function (f) {
+      var pr = f.properties || {}, kind = pr.kind;
+      if (kind === "cone") {
+        L.geoJSON(f.geometry, { pane:"tropical", style:{ color:"#e8e8e8", weight:1.5, fill:true,
+          fillColor:"#b0b0b0", fillOpacity:0.18 } })
+          .bindPopup("<b>" + esc(pr.stormname || pr.storm) + "</b> — forecast cone" +
+            "<br>advisory #" + esc(pr.advisnum || "?") + " · " + esc(pr.advdate || ""))
+          .addTo(tropicalLayer);
+      } else if (kind === "trk") {
+        L.geoJSON(f.geometry, { pane:"tropical", style:{ color:"#404040", weight:2, dashArray:"1 4" } })
+          .addTo(tropicalLayer);
+      } else if (kind === "fpt" && f.geometry && f.geometry.type === "Point") {
+        var c = f.geometry.coordinates;
+        var lbl = pr.dvlbl || (pr.ssnum >= 3 ? "M" : pr.maxwind >= 64 ? "H" : pr.maxwind >= 34 ? "S" : "D");
+        L.marker([c[1], c[0]], { pane:"tropical", icon: L.divIcon({ className:"tropfpt",
+            html:'<span style="background:' + tropPtColor(lbl) + '">' + lbl + "</span>",
+            iconSize:[16,16], iconAnchor:[8,8] }) })
+          .bindPopup("<b>" + esc(pr.stormname || pr.storm) + "</b>" +
+            "<br>" + esc(pr.datelbl || "") + " — " + esc(pr.tcdvlp || "") +
+            "<br>max wind " + esc(pr.maxwind) + " kt (gust " + esc(pr.gust) + ")" +
+            (pr.mslp ? "<br>pressure " + esc(pr.mslp) + " mb" : ""))
+          .addTo(tropicalLayer);
+      } else if (kind === "ww") {
+        var col = TROP_WW[pr.tcww] || "#e8a200";
+        L.geoJSON(f.geometry, { pane:"tropical", style:{ color:col, weight:5, opacity:0.85 } })
+          .bindPopup("<b>" + esc(TROP_WW_LBL[pr.tcww] || "Tropical watch/warning") + "</b>" +
+            "<br>" + esc(pr.stormname || pr.storm || ""))
+          .addTo(tropicalLayer);
+      } else if (kind === "devarea") {
+        L.geoJSON(f.geometry, { pane:"tropical", style:{ color:"#e8a200", weight:1.5, fill:true,
+          fillColor:"#e8a200", fillOpacity:0.12, dashArray:"6 4" } })
+          .bindPopup("<b>7-day tropical development area</b>" +
+            (pr.prob7day != null ? "<br>formation chance: " + esc(pr.prob7day) + "%" : ""))
+          .addTo(tropicalLayer);
+      } else if (kind === "devpt" && f.geometry && f.geometry.type === "Point") {
+        var dc = f.geometry.coordinates;
+        L.marker([dc[1], dc[0]], { pane:"tropical", icon: L.divIcon({ className:"tropdev",
+            html:"&#10005;", iconSize:[14,14], iconAnchor:[7,7] }) })
+          .bindPopup("<b>Possible tropical development</b>" +
+            (pr.prob7day != null ? "<br>7-day chance: " + esc(pr.prob7day) + "%" : ""))
+          .addTo(tropicalLayer);
+      }
+    });
+    // far-offshore storms with no drawn features still get a labeled marker
+    (j.storms || []).forEach(function (s) {
+      if (s.lat == null || s.lon == null) return;
+      L.marker([s.lat, s.lon], { pane:"tropical", icon: L.divIcon({ className:"tropstorm",
+          html:'<span>&#127786;</span>', iconSize:[18,18], iconAnchor:[9,9] }) })
+        .bindPopup("<b>" + esc(s.name) + "</b> — " + esc(TROP_CLASS[s.classification] || s.classification) +
+          "<br>" + esc(s.intensityKt) + " kt · " + esc(s.pressureMb) + " mb" +
+          (s.movementDir != null ? "<br>moving " + esc(s.movementDir) + "° at " + esc(s.movementSpeed) + " kt" : "") +
+          "<br><span style='color:#889'>advisory " + esc((s.lastUpdate || "").slice(0, 16).replace("T", " ")) + "Z</span>")
+        .addTo(tropicalLayer);
+    });
+  });
+}
+
 /* METAR / ASOS surface observations — in-view, de-cluttered station plots.
    Source = IEM per-state ASOS currents (CORS-open; aviationweather.gov is not). We pick the
    states whose bbox overlaps the view (capped) and merge their current obs. */
@@ -2269,9 +2467,9 @@ document.getElementById("refresh").addEventListener("click", function () {
   var src = currentProductSrc();
   if (src === "rv" || src === "sat") loadRainViewer();
   else if (src === "precip" || src === "mrms") applyProduct();   // re-request the layer + loop
-  eetCache = {}; dvlCache = {}; alertsCache = null; geoCache = {};  // force-refresh Level III + alerts + vectors
+  eetCache = {}; dvlCache = {}; alertsCache = null; geoCache = {}; tropCache = null;  // force-refresh Level III + alerts + vectors
   loadWarnings();
-  loadOutlook(); loadWatches(); loadMetar();          // no-ops when their toggles are off
+  loadOutlook(); loadWatches(); loadMcd(); loadTropical(); loadMetar();   // no-ops when their toggles are off
 });
 
 /* ===================== AUTO-REFRESH (live mode) =====================
@@ -2302,6 +2500,8 @@ function autoRefresh() {
   refreshStill();
   loadWarnings();                                   // NST/EET/DVL/alert caches gate refetches
   if (document.getElementById("c-metar").checked) loadMetar();
+  if (document.getElementById("c-mcd").checked) loadMcd();            // 5-min cache gates
+  if (document.getElementById("c-tropical").checked) loadTropical();  // 10-min cache gates
 }
 setInterval(function () {
   var el = document.getElementById("autonext");
@@ -2376,7 +2576,7 @@ map.on("zoomend", function () {
    not sent to any server, no size limit, and this is a static site. */
 var PREFS_KEY = "classicRadar.prefs.v1";
 var PREF_CHECKS = ["c-base","c-county","c-hwy","c-city","c-warn","c-alerts","c-cells","c-tracks",
-                   "c-tops","c-watches","c-outlook","c-metar","c-sites","c-iem",
+                   "c-tops","c-watches","c-outlook","c-mcd","c-tropical","c-metar","c-sites","c-iem",
                    "c-autorefresh","c-chime","c-ptfcst"];
 var PREF_SELECTS = ["product","frames","speed","dwell","network"];
 var restoredView = false;

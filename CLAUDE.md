@@ -406,6 +406,29 @@ mid-transition in the automated Browser-pane preview, which throttles animation 
 - PLAY animates the RainViewer historical loop (12→3 frame advance confirmed).
 - The Browser-pane screenshot tool times out on the live-tile map — verify via DOM/JS introspection.
 
+## MDs + tropical + new loop products + time-machine scrubbing (2026-08-02, server v1.3 round)
+- **SPC Mesoscale Discussions** (`c-mcd`, `mcd` pane z383, keyless): IEM
+  `api/1/nws/spc_mcd.geojson?hours=6` (CORS `*`, real polygons — the json/spcmcd.py service has
+  NO geometry), expired MDs filtered client-side; dashed tan areas, popup = #num / concerning /
+  watch-confidence / SPC link. 5-min cache; refreshed by autoRefresh + Reload data.
+- **NHC tropical overlay** (`c-tropical`, `tropical` pane z344, ◆ server — CurrentStorms.json has
+  no CORS): `/api/tropical` → cone (gray fill), dotted track, D/S/H/M forecast points (colored
+  divIcons by `dvlbl`), watch/warning coastlines (TROP_WW colors), 7-day dev areas/points, plus a
+  🌪 marker per active storm from `storms[]`. Checkbox disabled keyless with "◆ needs server" tag;
+  10-min client cache (`tropCache`).
+- **2 new ◆ loop products**: MQPE (`qpe`, hourly rainfall) and MH24 (`mesh24`, 24-h hail swath) —
+  pure option-table additions, the generic mrms paths handle them.
+- **Loop-end pin / time machine** (`#histwrap` in the playbar, ◆): a second range slider scrubs
+  the loop's END to any stamp in the server's 24-h archive (`updateHistControl` fetches the
+  product's stamp domain; `applyEndPin` filters every loader's frame list; pinned → the last frame
+  SHOWS paused instead of goLive). The pin **survives product switches** (radar@09Z ↔ QPE@09Z ↔
+  satellite@09Z — deliberate), ◉ LIVE unpins + rebuilds the live window, server loss clears it.
+  Verified live: QPE pinned 09:00Z (12 hourly frames 22→09Z, frame displayed), switch to N0B kept
+  the 09:00Z moment (10-min radar frames), LIVE returned to "IEM current"/now.
+- **BUG FIX (real, pre-existing)**: composite-mode MRMS frames requested `/frame/mrms/{id}/{ts}`
+  — 3 path segments vs the server's 2-segment route → every national-zoom MRMS composite frame
+  404'd and dead-skipped. `frameUrlFor` now strips the `mrms/` prefix for composites.
+
 ## Composite loops (2026-08-02): at national zoom (enhanced, z<=6) every loop uses ONE
 pre-composited image per frame (`/frame/{prod}/{ts}.png`, L.imageOverlay double-buffer,
 `useComposite`/`makeCompBuffers`/`frameUrlFor`, zoomend crossing rebuilds) — atomic frames, no
