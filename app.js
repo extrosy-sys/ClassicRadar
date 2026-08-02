@@ -24,6 +24,7 @@ var map = L.map("map", {
   center: [35.33, -97.28],   // KTLX / Oklahoma City - classic severe-wx home
   zoom: 7,
   zoomControl: false,        // re-added bottom-left so it doesn't sit on the pan grid
+  fadeAnimation: false,      // no per-tile fade-in: it reads as a camera flash during loops
   worldCopyJump: false,
   maxBounds: [[-84, -178], [84, 178]],
   maxBoundsViscosity: 0.9,
@@ -321,6 +322,7 @@ function clearFrames() {
   buffers.forEach(function (l) { map.removeLayer(l); });
   buffers = []; frontBuf = 0;
   frameUrls = []; frameTimes = [];
+  deadFrames = {}; wantedFrame = -1;
 }
 
 /* RainViewer is only a ~2 km mosaic (native z7), so it turns to coarse blocks when zoomed
@@ -538,8 +540,25 @@ function makeBuffers(maxNative, attribution, label) {
     var lyr = attachRetry(L.tileLayer(lastUrl, { pane:"radar", opacity:0, maxZoom:18,
       maxNativeZoom:maxNative, noWrap:true, attribution:attribution }), label).addTo(map);
     lyr._crFrame = frameUrls.length - 1;
+    // load-gating state: a frame is only revealed once ALL its tiles are in (no half-loaded
+    // flash), and a frame whose every tile errors (missing upstream imagery) is marked dead
+    // and skipped instead of blanking the map.
+    lyr._crLoaded = false;
+    lyr.on("loading", function () { this._crOk = 0; this._crErr = 0; });
+    lyr.on("tileload", function () { this._crOk++; });
+    lyr.on("tileerror", function () { this._crErr++; });
+    lyr.on("load", function () {
+      this._crLoaded = true;
+      if (this._crOk === 0 && this._crErr > 0) deadFrames[this._crFrame] = true;
+      onBufferLoad(this);
+    });
     buffers.push(lyr);
   }
+}
+function setBufferFrame(lyr, idx) {
+  lyr._crLoaded = false;
+  lyr._crFrame = idx;
+  lyr.setUrl(frameUrls[idx]);
 }
 
 var loopReq = 0;   // stale-load guard: only the NEWEST loop request may install frames
@@ -712,6 +731,7 @@ function liveStampText() {
 function goLive() {
   if (srvActive) closeSingleRadar(false);                // LIVE returns to the composite
   usingFrames = false;
+  wantedFrame = -1;                                      // cancel any pending frame reveal
   buffers.forEach(function (l) { l.setOpacity(0); });
   setStillVisible(true);
   document.getElementById("stamp").textContent = liveStampText();
@@ -719,28 +739,77 @@ function goLive() {
   var s = document.getElementById("scrub"); if (s) s.value = s.max;
 }
 
+var deadFrames = {};    // frame index -> true when upstream has no imagery for it
+var wantedFrame = -1;   // the frame the UI is trying to show (-1 = none / live)
+
+function nextLiveFrame(from, dir) {          // nearest non-dead index in a direction
+  var n = frameUrls.length;
+  var idx = ((from % n) + n) % n;
+  for (var g = 0; g < n; g++) {
+    if (!deadFrames[idx]) return idx;
+    idx = (idx + (dir || 1) + n) % n;
+  }
+  return -1;
+}
+
 function showFrame(i) {
   if (!frameUrls.length || buffers.length < 2) return;
-  usingFrames = true;
-  setStillVisible(false);         // hide the still while an animation frame is up
-  var n = frameUrls.length;
-  curFrame = (i + n) % n;
+  var target = nextLiveFrame(i, 1);
+  if (target < 0) return;                    // every frame dead: keep the still
+  wantedFrame = target;
   var front = buffers[frontBuf], back = buffers[1 - frontBuf];
-  if (front._crFrame === curFrame) {
-    front.setOpacity(radarOpacity());            // already the visible frame
-  } else {
-    if (back._crFrame !== curFrame) { back.setUrl(frameUrls[curFrame]); back._crFrame = curFrame; }
-    back.setOpacity(radarOpacity());             // reveal the (pre)loaded buffer, then hide the old
-    front.setOpacity(0);
-    frontBuf = 1 - frontBuf;
+  if (front._crFrame === target) {           // already showing (or reloading) it
+    usingFrames = true;
+    setStillVisible(false);
+    front.setOpacity(radarOpacity());
+    updateLoopUi(target);
+    preloadNext();
+    return;
   }
-  var t = new Date(frameTimes[curFrame] * 1000);
+  if (back._crFrame !== target) setBufferFrame(back, target);
+  if (back._crLoaded) commitSwap();
+  // not loaded yet -> keep the CURRENT image up; onBufferLoad commits when tiles are in.
+  // Playback self-paces: tick keeps asking for the same target until it's ready.
+}
+
+function commitSwap() {
+  if (wantedFrame < 0) return;               // loop was left (◉ LIVE) while tiles loaded
+  var back = buffers[1 - frontBuf];
+  usingFrames = true;
+  setStillVisible(false);
+  back.setOpacity(radarOpacity());
+  buffers[frontBuf].setOpacity(0);
+  frontBuf = 1 - frontBuf;
+  updateLoopUi(back._crFrame);
+  preloadNext();
+}
+
+function onBufferLoad(lyr) {
+  if (wantedFrame < 0) return;
+  if (deadFrames[lyr._crFrame]) {
+    // the frame turned out to be empty upstream — never reveal it; advance past it
+    if (lyr._crFrame === wantedFrame) {
+      if (playing) showFrame(wantedFrame + 1);
+      else document.getElementById("stamp").textContent = "no imagery";
+    }
+    return;
+  }
+  if (lyr === buffers[1 - frontBuf] && lyr._crFrame === wantedFrame) commitSwap();
+}
+
+function updateLoopUi(idx) {
+  curFrame = idx;
+  var t = new Date(frameTimes[idx] * 1000);
   document.getElementById("stamp").textContent = fmtStamp(t);
-  document.getElementById("scrub").value = curFrame;
-  document.getElementById("frameidx").textContent = (curFrame + 1) + "/" + n;
-  // preload the NEXT frame onto the now-hidden buffer so the next tick swaps instantly
-  var nb = buffers[1 - frontBuf], nf = (curFrame + 1) % n;
-  if (nb._crFrame !== nf) { nb.setUrl(frameUrls[nf]); nb._crFrame = nf; }
+  document.getElementById("scrub").value = idx;
+  document.getElementById("frameidx").textContent = (idx + 1) + "/" + frameUrls.length;
+}
+
+/* preload the NEXT (non-dead) frame onto the hidden buffer so the next tick swaps instantly */
+function preloadNext() {
+  var nb = buffers[1 - frontBuf];
+  var nf = nextLiveFrame(curFrame + 1, 1);
+  if (nf >= 0 && nb._crFrame !== nf) setBufferFrame(nb, nf);
 }
 function wireScrub() {
   var s = document.getElementById("scrub");
