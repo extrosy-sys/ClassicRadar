@@ -210,6 +210,7 @@ function srvCapsSummary() {
   return parts.join(" · ");
 }
 function srvSetState(url, health) {
+  var wasUp = SRV.up;
   SRV.url = url; SRV.up = !!health; SRV.fails = 0;
   SRV.mrms = (health && health.caps && health.caps.mrms) || [];
   var badge = document.getElementById("srvbadge");
@@ -234,6 +235,14 @@ function srvSetState(url, health) {
   }
   var atab = P("tab-alerts");        // flip the tab's ◆ immediately, not on the next render
   if (atab) atab.textContent = atab.textContent.replace(" ◆", "") + (SRV.up ? " ◆" : "");
+  // reflectivity products: the loop source depends on the server — refresh the note, and on a
+  // down->up transition swap the (boot-raced) RainViewer frames for crisp server archive frames
+  var prodSel = document.getElementById("product");
+  if (optSrc(prodSel) === "rv") {
+    var pn = document.getElementById("prodnote");
+    if (pn) pn.textContent = rvNote();
+    if (SRV.up && !wasUp) loadRainViewer();      // loopReq guard discards any in-flight stale load
+  }
   if (!SRV.up) {
     // if a server-only selection is active, drop back to the keyless equivalents
     var prod = document.getElementById("product");
@@ -531,11 +540,20 @@ var loopReq = 0;   // stale-load guard: only the NEWEST loop request may install
 function loadRainViewer() {
   var fsel = document.getElementById("frames").value;
   if (fsel.charAt(0) === "s") {
-    if (SRV.up) return loadServerLoop(fsel);
+    if (SRV.up) return loadServerLoop({ s3h: { h: 3, step: 5 }, s6h: { h: 6, step: 10 },
+                                        s24h: { h: 24, step: 30 } }[fsel] || { h: 3, step: 5 });
     document.getElementById("frames").value = "24";          // server gone -> RainViewer fallback
+    fsel = "24";
   }
-  var req = ++loopReq;
   var n = parseInt(fsel, 10);
+  // enhanced: even the plain N-frame loop comes from the server's IEM archive (native z12,
+  // same crispness as the live still) instead of RainViewer's z7 ~2 km mosaic. Same ~10-min
+  // spacing and span as the RainViewer loop it replaces; falls back seamlessly.
+  if (SRV.up) return loadServerLoop({ h: Math.max(1, Math.ceil(n * 10 / 60)), step: 10, take: n });
+  return loadRvDirect(n);
+}
+function loadRvDirect(n) {
+  var req = ++loopReq;
   var scheme = currentScheme();
   return fetch("https://api.rainviewer.com/public/weather-maps.json")
     .then(function (r) { return r.json(); })
@@ -562,15 +580,16 @@ function loadRainViewer() {
 function tsToUnix(ts) {   // "YYYYMMDDHHMM" (UTC) -> unix seconds
   return Date.UTC(+ts.slice(0, 4), +ts.slice(4, 6) - 1, +ts.slice(6, 8), +ts.slice(8, 10), +ts.slice(10, 12)) / 1000;
 }
-function loadServerLoop(spec) {
+function loadServerLoop(conf) {
   var req = ++loopReq;
-  var conf = { s3h: { h: 3, step: 5 }, s6h: { h: 6, step: 10 }, s24h: { h: 24, step: 30 } }[spec] || { h: 3, step: 5 };
   return fetch(SRV.url + "/api/frames?hours=" + conf.h + "&step=" + conf.step)
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(function (j) {
       if (req !== loopReq) return false;   // a newer loop load superseded this one
       clearFrames();
-      (j.frames || []).forEach(function (ts) {
+      var list = j.frames || [];
+      if (conf.take && list.length > conf.take) list = list.slice(-conf.take);
+      list.forEach(function (ts) {
         frameUrls.push(SRV.url + "/tiles/n0q/" + ts + "/{z}/{x}/{y}.png");
         frameTimes.push(tsToUnix(ts));
       });
@@ -581,9 +600,11 @@ function loadServerLoop(spec) {
       return true;
     })
     .catch(function () {
+      // fall straight to RainViewer (NOT loadRainViewer, which could re-enter this path)
       srvFail();
+      if (conf.take) return loadRvDirect(conf.take);
       document.getElementById("frames").value = "24";
-      return loadRainViewer();
+      return loadRvDirect(24);
     });
 }
 
@@ -649,6 +670,18 @@ function pause() {
   clearInterval(timer);
 }
 
+/* reflectivity-product note: written by applyProduct AND rewritten when the server
+   state changes, since the loop source (server archive vs RainViewer) depends on it */
+function rvNote() {
+  var sel = document.getElementById("product");
+  var opt = sel.options[sel.selectedIndex];
+  var stillName = (opt.value === "NCR") ? "MRMS composite reflectivity (column-max)" : "IEM base reflectivity (0.5° tilt)";
+  return opt.text.replace(/&deg;/g, "°") +
+    " — current " + stillName + " still. Press PLAY for the loop (" +
+    (SRV.up ? "◆ crisp IEM archive frames via the server" : "RainViewer ~2 h, coarser than the still") +
+    "); ◉ LIVE returns to the current still.";
+}
+
 /* --- product switch: reflectivity products animate the RainViewer loop;
    the crisp IEM true-dBZ still is a separate toggle (c-iem). --- */
 function applyProduct() {
@@ -664,10 +697,7 @@ function applyProduct() {
   if (src === "rv") {
     clearSat();
     setPlaybar(true);
-    var stillName = (opt.value === "NCR") ? "MRMS composite reflectivity (column-max)" : "IEM base reflectivity (0.5° tilt)";
-    note.textContent = opt.text.replace(/&deg;/g,"°") +
-      " — current " + stillName + " still. Press PLAY for the last ~2 h RainViewer loop; " +
-      "◉ LIVE returns to the current still.";
+    note.textContent = rvNote();
     loadRainViewer();
   } else if (src === "sat") {
     clearFrames();
@@ -1779,6 +1809,69 @@ function loadMetar() {
     });
   }).catch(function () {});
 }
+/* ---- plain-English METAR decode (shown in the station popup under the raw report) ---- */
+var METAR_WX = {
+  TS:"thunderstorm", SH:"showers of", FZ:"freezing", BL:"blowing", DR:"drifting",
+  MI:"shallow", BC:"patches of", PR:"partial", RA:"rain", SN:"snow", DZ:"drizzle",
+  GR:"hail", GS:"small hail", PL:"ice pellets", IC:"ice crystals", UP:"unknown precipitation",
+  BR:"mist", FG:"fog", HZ:"haze", FU:"smoke", DU:"dust", SA:"sand", VA:"volcanic ash",
+  PY:"spray", SQ:"squalls", FC:"FUNNEL CLOUD", PO:"dust whirls", DS:"dust storm", SS:"sandstorm"
+};
+var METAR_SKY = { FEW:"few clouds", SCT:"scattered clouds", BKN:"broken clouds", OVC:"overcast" };
+function cToF(c) { return Math.round(c * 9 / 5 + 32); }
+function decodeMetar(raw) {
+  if (!raw) return [];
+  var toks = raw.split(/\s+RMK\s/)[0].replace(/=+\s*$/, "").split(/\s+/);
+  var wind = null, vis = null, wx = [], sky = [], td = null, alt = null, time = null, vary = null;
+  var m, i;
+  for (i = 0; i < toks.length; i++) {
+    var t = toks[i];
+    if ((m = /^(\d{2})(\d{2})(\d{2})Z$/.exec(t))) { time = "observed " + m[2] + ":" + m[3] + "Z"; }
+    else if ((m = /^(VRB|\d{3})(\d{2,3})(?:G(\d{2,3}))?KT$/.exec(t))) {
+      var spd = parseInt(m[2], 10);
+      if (m[1] !== "VRB" && spd === 0) wind = "wind calm";
+      else wind = "wind " + (m[1] === "VRB" ? "variable" : "from the " + compass(parseInt(m[1], 10))) +
+        " at " + spd + " kt" + (m[3] ? ", gusting " + parseInt(m[3], 10) + " kt" : "");
+    }
+    else if ((m = /^(\d{3})V(\d{3})$/.exec(t))) { vary = "direction varying " + m[1] + "°–" + m[2] + "°"; }
+    else if ((m = /^P?(\d{1,2})SM$/.exec(t))) { vis = "visibility " + (t.charAt(0) === "P" ? "over " : "") + parseInt(m[1], 10) + " mi"; }
+    else if ((m = /^(\d)\/(\d{1,2})SM$/.exec(t))) {
+      var whole = /^\d{1,2}$/.test(toks[i - 1] || "") ? toks[i - 1] + " " : "";   // "1 1/2SM"
+      vis = "visibility " + whole + m[1] + "/" + m[2] + " mi";
+    }
+    else if ((m = /^(SKC|CLR|NSC|NCD)$/.exec(t))) { sky.push("sky clear"); }
+    else if ((m = /^(FEW|SCT|BKN|OVC)(\d{3})(CB|TCU)?$/.exec(t))) {
+      sky.push(METAR_SKY[m[1]] + " at " + (parseInt(m[2], 10) * 100).toLocaleString() + " ft" +
+        (m[3] === "CB" ? " (thunderheads)" : m[3] === "TCU" ? " (towering cumulus)" : ""));
+    }
+    else if ((m = /^VV(\d{3})$/.exec(t))) { sky.push("sky obscured, vertical visibility " + (parseInt(m[1], 10) * 100) + " ft"); }
+    else if ((m = /^(M?\d{1,2})\/(M?\d{1,2})$/.exec(t))) {
+      var tc = parseInt(m[1].replace("M", "-"), 10), dc = parseInt(m[2].replace("M", "-"), 10);
+      td = "temp " + cToF(tc) + "°F, dewpoint " + cToF(dc) + "°F";
+    }
+    else if ((m = /^A(\d{4})$/.exec(t))) { alt = "altimeter " + m[1].slice(0, 2) + "." + m[1].slice(2) + " inHg"; }
+    else if ((m = /^Q(\d{4})$/.exec(t))) { alt = "altimeter " + parseInt(m[1], 10) + " hPa"; }
+    else if ((m = /^([+-]|VC)?([A-Z]{2,6})$/.exec(t)) && t !== "AUTO" && t !== "METAR" && t !== "SPECI" && t !== "COR") {
+      // present weather: optional intensity + a chain of known 2-letter codes
+      var body = m[2], words = [], ok = body.length >= 2 && body.length % 2 === 0;
+      for (var q = 0; ok && q < body.length; q += 2) {
+        var w = METAR_WX[body.slice(q, q + 2)];
+        if (w) words.push(w); else ok = false;
+      }
+      if (ok) wx.push((m[1] === "+" ? "heavy " : m[1] === "-" ? "light " : m[1] === "VC" ? "nearby " : "") + words.join(" "));
+    }
+  }
+  var out = [];
+  if (time) out.push(time);
+  if (wind) out.push(wind + (vary ? " (" + vary + ")" : ""));
+  if (vis) out.push(vis);
+  if (wx.length) out.push(wx.join("; "));
+  if (sky.length) out.push(sky.join(", "));
+  if (td) out.push(td);
+  if (alt) out.push(alt);
+  return out;
+}
+
 function makeMetarMarker(p, latlng) {
   var arrow = (p.drct != null && p.sknt != null && p.sknt > 0)
     ? '<span class="mw" style="transform:rotate(' + ((p.drct + 180) % 360) + 'deg)">&#8593;</span>' : "";
@@ -1787,7 +1880,11 @@ function makeMetarMarker(p, latlng) {
     .bindPopup("<b>" + esc(p.station) + "</b> " + esc(p.name || "") +
       "<br>T " + Math.round(p.tmpf) + "&deg;F&nbsp;·&nbsp;Td " + (p.dwpf != null ? Math.round(p.dwpf) : "—") + "&deg;F" +
       "<br>wind " + esc(p.drct) + "&deg; @ " + esc(p.sknt) + " kt" + (p.gust ? " G" + esc(p.gust) : "") +
-      (p.wxcodes ? "<br>wx: " + esc(p.wxcodes) : "") + '<br><small>' + esc(p.raw || "") + "</small>");
+      (p.wxcodes ? "<br>wx: " + esc(p.wxcodes) : "") + '<br><small>' + esc(p.raw || "") + "</small>" +
+      (function () {                       // plain-English decode of the raw report
+        var lines = decodeMetar(p.raw);
+        return lines.length ? '<div class="mdecode">' + lines.map(esc).join("<br>") + "</div>" : "";
+      })());
 }
 
 /* ===================== STORM PANEL TABS ===================== */

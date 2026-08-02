@@ -541,3 +541,7 @@ option.srvopt { color: #1f7a33; font-weight: bold; }
 option.srvopt:disabled { color: #9aa7b5; font-weight: normal; }
 .srvtag { color: #1f7a33; font: bold 10px/1 Arial, sans-serif; margin-left: 5px; white-space: nowrap; }
 #server-status.srv-on { color: #1f7a33; }
+
+/* plain-English METAR decode inside the station popup */
+.mdecode { margin-top: 4px; padding-top: 4px; border-top: 1px dotted #b9c2cc;
+  font: 11px Arial, sans-serif; color: #33475b; max-width: 240px; }
