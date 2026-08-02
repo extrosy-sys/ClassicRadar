@@ -545,3 +545,13 @@ option.srvopt:disabled { color: #9aa7b5; font-weight: normal; }
 /* plain-English METAR decode inside the station popup */
 .mdecode { margin-top: 4px; padding-top: 4px; border-top: 1px dotted #b9c2cc;
   font: 11px Arial, sans-serif; color: #33475b; max-width: 240px; }
+
+/* click-anywhere point forecast popup (Open-Meteo) */
+.ptfcst { font: 11px Arial, sans-serif; color: #101820; }
+.ptfcst .pf-ll { color: #667; font-size: 10px; }
+.ptfcst table.pf { border-collapse: collapse; margin-top: 4px; font-family: "Courier New", monospace; }
+.ptfcst table.pf th, .ptfcst table.pf td { border: 1px solid #ccd3dc; padding: 1px 6px; text-align: right; font-size: 10px; }
+.ptfcst table.pf th { background: #e4e9f1; color: #002b5c; }
+.ptfcst .pf-cape { margin-top: 3px; color: #7a1f1f; font-weight: bold; }
+.ptfcst .pf-src { margin-top: 2px; color: #99a; font-size: 9px; }
+.ptfcst .pf-load { color: #667; }

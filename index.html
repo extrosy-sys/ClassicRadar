@@ -70,6 +70,7 @@
               <option value="MMESH" data-src="mrms" data-mrms="mesh" class="srvopt" disabled>&#9670; Hail size &mdash; MESH (mm)</option>
               <option value="MVIL" data-src="mrms" data-mrms="vil" class="srvopt" disabled>&#9670; VIL grid (kg/m&sup2;)</option>
               <option value="MROT" data-src="mrms" data-mrms="rot" class="srvopt" disabled>&#9670; Rotation tracks &mdash; 60 min</option>
+              <option value="MLTG" data-src="mrms" data-mrms="ltg" class="srvopt" disabled>&#9670; Lightning &mdash; CG strikes (NLDN)</option>
             </optgroup>
             <optgroup label="Volumetric (open 3D)">
               <option value="V-REF" data-src="d3" data-prod="refl">Reflectivity tilts &rarr; 3D</option>
@@ -119,9 +120,10 @@
             <option value="5">5&times; last frame</option>
           </select>
         </div>
-        <p class="hint">Frames ~10&nbsp;min apart (24 &asymp; 2&nbsp;h). Keyless = RainViewer (~2&nbsp;km,
-          soft when zoomed); <span class="srvtag">&#9670;</span>&nbsp;with the server, every loop uses
-          crisp IEM archive frames &mdash; same sharpness as the live still.</p>
+        <p class="hint">Applies to every animatable product: radar, satellite, and the
+          <span class="srvtag">&#9670;</span>&nbsp;MRMS severe grids. Keyless radar = RainViewer
+          (~2&nbsp;km, soft); <span class="srvtag">&#9670;</span>&nbsp;with the server every radar loop
+          uses crisp IEM archive frames. Satellite animates in both modes (NASA GIBS history).</p>
       </div>
     </div>
 
@@ -144,6 +146,7 @@
         <div class="checkline"><input type="checkbox" id="c-iem"><label for="c-iem">Force IEM true-dBZ still</label></div>
         <div class="checkline"><input type="checkbox" id="c-autorefresh" checked><label for="c-autorefresh">Auto-refresh (2 min)</label></div>
         <div class="checkline"><input type="checkbox" id="c-chime"><label for="c-chime">Chime on new warning</label></div>
+        <div class="checkline"><input type="checkbox" id="c-ptfcst" checked><label for="c-ptfcst">Click map &rarr; point forecast</label></div>
         <div class="row" style="margin-top:6px">
           <label>Radar opacity</label>
           <input type="range" id="opacity" min="20" max="100" value="80" class="full">

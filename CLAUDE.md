@@ -189,6 +189,22 @@ toolset** (`#srvtool`) to slide through the tilts, toggle the product, and close
   collapsed bounds (bbox = center point) — dispatch a window `resize` (app already listens →
   `invalidateSize`) before trusting in-view counts.
 
+## Animate-everything + point forecasts + obs upgrades (2026-08-02)
+- **Every animatable product now loops via one dispatcher** (`loadRainViewer` → per-src loaders,
+  `loopReq` stale-guard, `loopSpec()` maps the frames select to {hours, step, take} per cadence):
+  radar (server IEM archive when enhanced / RainViewer keyless), **satellite** (GOES via GIBS —
+  timestamped WMTS path, 10-min imagery; **animates keyless too**, server just serves cached
+  copies), and **MRMS severe grids** (enhanced only, `/tiles/mrms/{id}/at/{ts}/…`).
+  `setStillVisible`/`liveStampText` generalize goLive/showFrame across products.
+- **Lightning**: 4th ◆ severe product (MLTG) — real NLDN CG strike density via the server, with
+  legend, animatable like the rest.
+- **Click-anywhere point forecast** (`pointForecast`, toggle `c-ptfcst` default ON): Open-Meteo
+  (keyless, CORS-open, HRRR/GFS blend) — next 12 h table (temp/precip%/wind) + current CAPE in a
+  popup. Clicks on interactive features (polys/markers/popups) are excluded via `closest()`.
+- **Obs source chain**: Synoptic mesonet (server + token, `/api/obs`) → AWC (server) → IEM
+  (keyless); `SRV.synoptic` from health caps drives the ◆ tag ("◆ Synoptic"/"◆ AWC").
+- Satellite loops' newest frame runs 40 min behind realtime (GIBS latency).
+
 ## Verbose weather-alerts table (map-linked)
 Third storm-panel tab **"Alerts (N)"** (beside Storm Attribute Table / Level III Text): every active NWS
 alert — all event types (warnings, watches, advisories, statements) — whose polygon intersects the view,

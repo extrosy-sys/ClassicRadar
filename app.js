@@ -203,7 +203,8 @@ function srvProbe(url, cb) {
 }
 /* one-line inventory of what the server is currently providing (badge tooltip + status) */
 function srvCapsSummary() {
-  var parts = ["slim alerts", "aviation METARs", "24-h archive loop"];
+  var parts = ["slim alerts", SRV.synoptic ? "Synoptic mesonet obs" : "aviation METARs",
+               "24-h radar+satellite loops"];
   if (SRV.mrms.length) parts.push("MRMS " + SRV.mrms.map(function (p) {
     return p.id + (p.valid ? " " + p.valid.slice(11, 16) + "Z" : "");
   }).join("/"));
@@ -213,6 +214,7 @@ function srvSetState(url, health) {
   var wasUp = SRV.up;
   SRV.url = url; SRV.up = !!health; SRV.fails = 0;
   SRV.mrms = (health && health.caps && health.caps.mrms) || [];
+  SRV.synoptic = !!(health && health.caps && health.caps.synoptic);
   var badge = document.getElementById("srvbadge");
   if (badge) {
     badge.style.display = SRV.up ? "" : "none";
@@ -226,7 +228,11 @@ function srvSetState(url, health) {
   if (fg) fg.label = SRV.up ? "Archive loop — ◆ server" : "Archive loop — needs server";
   [].forEach.call(document.querySelectorAll("option.srvopt"), function (o) { o.disabled = !SRV.up; });
   var mt = document.getElementById("tag-metar");
-  if (mt) { mt.textContent = SRV.up ? "◆ AWC" : ""; mt.title = SRV.up ? "Obs from aviationweather.gov via the enhancement server" : ""; }
+  if (mt) {
+    mt.textContent = SRV.up ? (SRV.synoptic ? "◆ Synoptic" : "◆ AWC") : "";
+    mt.title = SRV.up ? (SRV.synoptic ? "Dense mesonet obs (Synoptic) via the enhancement server"
+                                      : "Obs from aviationweather.gov via the enhancement server") : "";
+  }
   var st = document.getElementById("server-status");
   if (st) {
     st.textContent = SRV.up ? "◆ Connected: " + url + " — " + srvCapsSummary()
@@ -537,20 +543,33 @@ function makeBuffers(maxNative, attribution, label) {
 }
 
 var loopReq = 0;   // stale-load guard: only the NEWEST loop request may install frames
-function loadRainViewer() {
+
+/* frames-select value -> {h, step, take} for a product with a given base cadence */
+function loopSpec(baseStep) {
   var fsel = document.getElementById("frames").value;
-  if (fsel.charAt(0) === "s") {
-    if (SRV.up) return loadServerLoop({ s3h: { h: 3, step: 5 }, s6h: { h: 6, step: 10 },
-                                        s24h: { h: 24, step: 30 } }[fsel] || { h: 3, step: 5 });
+  if (fsel === "s3h") return { h: 3, step: baseStep <= 5 ? 5 : baseStep };
+  if (fsel === "s6h") return { h: 6, step: baseStep <= 10 ? 10 : baseStep };
+  if (fsel === "s24h") return { h: 24, step: baseStep <= 30 ? 30 : 60 };
+  var n = parseInt(fsel, 10) || 12;
+  var step = Math.max(baseStep, 10);
+  return { h: Math.max(1, Math.ceil(n * step / 60)), step: step, take: n };
+}
+
+/* PLAY loop dispatcher — every animatable product routes through here */
+function loadRainViewer() {
+  var src = currentProductSrc();
+  if (src === "sat") return loadSatLoop();
+  if (src === "mrms") return SRV.up ? loadMrmsLoop() : Promise.resolve(false);
+  // ---- reflectivity ----
+  var fsel = document.getElementById("frames").value;
+  if (fsel.charAt(0) === "s" && !SRV.up) {
     document.getElementById("frames").value = "24";          // server gone -> RainViewer fallback
     fsel = "24";
   }
-  var n = parseInt(fsel, 10);
-  // enhanced: even the plain N-frame loop comes from the server's IEM archive (native z12,
-  // same crispness as the live still) instead of RainViewer's z7 ~2 km mosaic. Same ~10-min
-  // spacing and span as the RainViewer loop it replaces; falls back seamlessly.
-  if (SRV.up) return loadServerLoop({ h: Math.max(1, Math.ceil(n * 10 / 60)), step: 10, take: n });
-  return loadRvDirect(n);
+  // enhanced: every loop (plain N-frame included) comes from the server's IEM archive
+  // (native z12, same crispness as the live still) instead of RainViewer's z7 ~2 km mosaic.
+  if (SRV.up) return loadServerLoop(loopSpec(5));
+  return loadRvDirect(parseInt(fsel, 10));
 }
 function loadRvDirect(n) {
   var req = ++loopReq;
@@ -580,6 +599,73 @@ function loadRvDirect(n) {
 function tsToUnix(ts) {   // "YYYYMMDDHHMM" (UTC) -> unix seconds
   return Date.UTC(+ts.slice(0, 4), +ts.slice(4, 6) - 1, +ts.slice(6, 8), +ts.slice(8, 10), +ts.slice(10, 12)) / 1000;
 }
+function unixToTs(secs) { // unix seconds -> "YYYYMMDDHHMM" (UTC)
+  var d = new Date(secs * 1000);
+  return "" + d.getUTCFullYear() + pad(d.getUTCMonth() + 1) + pad(d.getUTCDate()) +
+    pad(d.getUTCHours()) + pad(d.getUTCMinutes());
+}
+
+/* ---- satellite animation: GIBS GOES layers accept an ISO time in the WMTS path (10-min
+   imagery, days of history). Enhanced = the server's cached copies; keyless = GIBS direct —
+   satellite loops work even on the plain GitHub Pages copy. ---- */
+function loadSatLoop() {
+  var req = ++loopReq;
+  var sel = document.getElementById("product");
+  var kind = sel.options[sel.selectedIndex].getAttribute("data-sat");
+  var g = GIBS[kind];
+  if (!g) return Promise.resolve(false);
+  var spec = loopSpec(10);
+  // newest imagery runs ~25-40 min behind realtime; frames are 10-min aligned
+  var newest = Math.floor((Date.now() / 1000 - 2400) / 600) * 600;
+  var list = [];
+  for (var t = newest - spec.h * 3600; t <= newest; t += spec.step * 60) list.push(t);
+  if (spec.take && list.length > spec.take) list = list.slice(-spec.take);
+  clearFrames();
+  list.forEach(function (secs) {
+    var ts = unixToTs(secs);
+    frameUrls.push(SRV.up
+      ? SRV.url + "/tiles/" + kind + "/" + ts + "/{z}/{x}/{y}.png"
+      : g.url.replace("/default/default/", "/default/" + TS_ISO(ts) + "/"));
+    frameTimes.push(secs);
+  });
+  if (req !== loopReq) return Promise.resolve(false);
+  makeBuffers(g.maxNative, "Satellite &copy; NASA GIBS / NOAA GOES-East", "GOES loop");
+  curFrame = frameUrls.length - 1;
+  wireScrub();
+  goLive();
+  return Promise.resolve(true);
+}
+function TS_ISO(ts) {
+  return ts.slice(0, 4) + "-" + ts.slice(4, 6) + "-" + ts.slice(6, 8) + "T" +
+    ts.slice(8, 10) + ":" + ts.slice(10, 12) + ":00Z";
+}
+
+/* ---- MRMS product animation (enhanced only): the server keeps 24 h of source frames and
+   renders historical tiles on demand. ---- */
+function loadMrmsLoop() {
+  var req = ++loopReq;
+  var sel = document.getElementById("product");
+  var id = sel.options[sel.selectedIndex].getAttribute("data-mrms");
+  var spec = loopSpec(10);
+  return fetch(SRV.url + "/api/frames?product=" + id + "&hours=" + spec.h + "&step=" + spec.step)
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function (j) {
+      if (req !== loopReq) return false;
+      clearFrames();
+      var list = j.frames || [];
+      if (spec.take && list.length > spec.take) list = list.slice(-spec.take);
+      list.forEach(function (ts) {
+        frameUrls.push(SRV.url + "/tiles/mrms/" + id + "/at/" + ts + "/{z}/{x}/{y}.png");
+        frameTimes.push(tsToUnix(ts));
+      });
+      makeBuffers(9, "MRMS &copy; NOAA/NSSL via enhancement server", "MRMS loop");
+      curFrame = frameUrls.length - 1;
+      wireScrub();
+      goLive();
+      return true;
+    })
+    .catch(function () { srvFail(); return false; });
+}
 function loadServerLoop(conf) {
   var req = ++loopReq;
   return fetch(SRV.url + "/api/frames?hours=" + conf.h + "&step=" + conf.step)
@@ -608,15 +694,27 @@ function loadServerLoop(conf) {
     });
 }
 
-var usingFrames = false;   // true while showing the RainViewer loop; false = reliable IEM "live"
+var usingFrames = false;   // true while showing an animation loop; false = the "live" still
 
-/* return to the reliable IEM current scan (shown at every zoom) */
+/* the current product's still layer, hidden while its animation frames are up */
+function setStillVisible(on) {
+  var src = currentProductSrc();
+  if (src === "rv") showIem(on);
+  else if (src === "sat" && satLayer) satLayer.setOpacity(on ? radarOpacity() : 0);
+  else if (src === "mrms" && mrmsLayer) mrmsLayer.setOpacity(on ? radarOpacity() : 0);
+}
+function liveStampText() {
+  var src = currentProductSrc();
+  return src === "sat" ? "GOES latest" : src === "mrms" ? "MRMS latest" : "IEM current";
+}
+
+/* return to the current still (every animatable product) */
 function goLive() {
   if (srvActive) closeSingleRadar(false);                // LIVE returns to the composite
   usingFrames = false;
   buffers.forEach(function (l) { l.setOpacity(0); });
-  if (currentProductSrc() === "rv") showIem(true);
-  document.getElementById("stamp").textContent = "IEM current";
+  setStillVisible(true);
+  document.getElementById("stamp").textContent = liveStampText();
   document.getElementById("frameidx").textContent = "live";
   var s = document.getElementById("scrub"); if (s) s.value = s.max;
 }
@@ -624,7 +722,7 @@ function goLive() {
 function showFrame(i) {
   if (!frameUrls.length || buffers.length < 2) return;
   usingFrames = true;
-  showIem(false);                 // hide IEM while the animation frame is up
+  setStillVisible(false);         // hide the still while an animation frame is up
   var n = frameUrls.length;
   curFrame = (i + n) % n;
   var front = buffers[frontBuf], back = buffers[1 - frontBuf];
@@ -700,12 +798,13 @@ function applyProduct() {
     note.textContent = rvNote();
     loadRainViewer();
   } else if (src === "sat") {
-    clearFrames();
-    setPlaybar(false);
+    setPlaybar(true);                            // GOES animates too (GIBS keeps time-stamped history)
     showSat(opt.getAttribute("data-sat"));
     note.textContent = opt.text.replace(/&deg;/g,"°") +
-      " — GOES-East, latest scan (NASA GIBS). Full-disk coverage, updates ~every 10 min.";
+      " — GOES-East (NASA GIBS), ~10-min imagery. Press PLAY to animate" +
+      (SRV.up ? " (◆ server-cached frames)" : "") + "; ◉ LIVE returns to the latest scan.";
     document.getElementById("stamp").textContent = "GOES latest";
+    loadRainViewer();                            // builds the satellite frame list
   } else if (src === "precip") {
     clearFrames(); clearSat();
     setPlaybar(false);
@@ -714,15 +813,17 @@ function applyProduct() {
       " — NOAA/NWS MRMS gauge-corrected QPE (inches). National mosaic, updates ~hourly.";
     document.getElementById("stamp").textContent = "MRMS QPE";
   } else if (src === "mrms") {
-    clearFrames(); clearSat();
-    setPlaybar(false);
+    clearSat();
+    setPlaybar(SRV.up);
     var mid = opt.getAttribute("data-mrms");
     if (SRV.up) {
       refreshMrms(mid);            // re-reads valid times, then draws the layer
       showMrms(mid);
       note.textContent = opt.text + " — MRMS national grid decoded by your enhancement server " +
-        "from NOAA's open-data bucket (updates ~2 min).";
+        "(updates ~2 min). Press PLAY to animate the last hours; ◉ LIVE returns to latest.";
+      loadRainViewer();            // builds the MRMS frame list
     } else {
+      clearFrames();
       note.textContent = "Requires the enhancement server (not connected).";
       document.getElementById("stamp").textContent = "server n/a";
     }
@@ -1368,8 +1469,8 @@ document.getElementById("view3d").addEventListener("click", function () {
 });
 document.getElementById("product").addEventListener("change", applyProduct);
 document.getElementById("frames").addEventListener("change", function () {
-  if (document.getElementById("product").options[document.getElementById("product").selectedIndex].getAttribute("data-src") === "rv")
-    loadRainViewer();
+  var src = currentProductSrc();
+  if (src === "rv" || src === "sat" || src === "mrms") loadRainViewer();   // rebuild the active loop
 });
 document.getElementById("speed").addEventListener("change", function () { if (playing) play(); });
 
@@ -1783,11 +1884,21 @@ function metarFromAwc(b) {
       });
     });
 }
+/* dense mesonet obs via the server's Synoptic proxy (already client-shaped) */
+function metarFromSynoptic(b) {
+  var bbox = b.getSouth().toFixed(1) + "," + b.getWest().toFixed(1) + "," +
+             b.getNorth().toFixed(1) + "," + b.getEast().toFixed(1);
+  return fetch(SRV.url + "/api/obs?bbox=" + bbox)
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); });
+}
 function loadMetar() {
   metarLayer.clearLayers();
   if (!document.getElementById("c-metar").checked) return;
   var b = map.getBounds();
-  var obsP = SRV.up
+  // best available chain: Synoptic mesonet (server+token) -> AWC aviation (server) -> IEM (keyless)
+  var obsP = SRV.up && SRV.synoptic
+    ? metarFromSynoptic(b).catch(function () { return metarFromAwc(b); }).catch(function () { srvFail(); return metarFromIem(b); })
+    : SRV.up
     ? metarFromAwc(b).catch(function () { srvFail(); return metarFromIem(b); })
     : metarFromIem(b);
   obsP.then(function (obs) {
@@ -1809,6 +1920,46 @@ function loadMetar() {
     });
   }).catch(function () {});
 }
+/* ---- click-anywhere point forecast (Open-Meteo: keyless, CORS-open, HRRR/GFS blend) ---- */
+function pointForecast(latlng) {
+  var url = "https://api.open-meteo.com/v1/forecast?latitude=" + latlng.lat.toFixed(3) +
+    "&longitude=" + latlng.lng.toFixed(3) +
+    "&hourly=temperature_2m,precipitation_probability,precipitation,wind_speed_10m,wind_gusts_10m," +
+    "wind_direction_10m,cape&forecast_hours=12&temperature_unit=fahrenheit&wind_speed_unit=kn&timezone=UTC";
+  var pop = L.popup({ maxWidth: 280 })
+    .setLatLng(latlng)
+    .setContent('<div class="ptfcst"><b>Point forecast</b><br><span class="pf-load">fetching Open-Meteo…</span></div>')
+    .openOn(map);
+  fetch(url).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+    var h = j && j.hourly;
+    if (!h || !h.time || !h.time.length) { pop.setContent('<div class="ptfcst">Forecast unavailable.</div>'); return; }
+    var rows = "";
+    for (var i = 0; i < h.time.length && i < 12; i += 2) {          // every 2 h over the next 12
+      var wd = h.wind_direction_10m[i], ws = Math.round(h.wind_speed_10m[i] || 0);
+      var g = Math.round(h.wind_gusts_10m[i] || 0);
+      rows += "<tr><td>" + esc(h.time[i].slice(11, 16)) + "Z</td>" +
+        "<td>" + Math.round(h.temperature_2m[i]) + "&deg;</td>" +
+        "<td>" + (h.precipitation_probability[i] != null ? h.precipitation_probability[i] + "%" : "—") + "</td>" +
+        "<td>" + (ws > 0 ? compass(wd) + " " + ws + (g > ws + 8 ? "G" + g : "") : "calm") + "</td></tr>";
+    }
+    var cape = h.cape && h.cape[0] != null ? Math.round(h.cape[0]) : null;
+    pop.setContent('<div class="ptfcst"><b>Point forecast</b> <span class="pf-ll">' +
+      latlng.lat.toFixed(2) + ", " + latlng.lng.toFixed(2) + "</span>" +
+      '<table class="pf"><tr><th>UTC</th><th>&deg;F</th><th>precip</th><th>wind kt</th></tr>' + rows + "</table>" +
+      (cape != null ? '<div class="pf-cape">CAPE now: ' + cape + " J/kg</div>" : "") +
+      '<div class="pf-src">Open-Meteo (HRRR/GFS blend)</div></div>');
+  }).catch(function () { pop.setContent('<div class="ptfcst">Forecast unavailable.</div>'); });
+}
+map.on("click", function (e) {
+  var cb = document.getElementById("c-ptfcst");
+  if (!cb || !cb.checked) return;
+  // ignore clicks that land on interactive features (polygons, markers, popups)
+  var t = e.originalEvent && e.originalEvent.target;
+  if (t && t.closest && (t.closest(".leaflet-interactive") || t.closest(".leaflet-marker-icon") ||
+      t.closest(".leaflet-popup") || t.closest(".metarwrap") || t.closest(".cellmark-wrap"))) return;
+  pointForecast(e.latlng);
+});
+
 /* ---- plain-English METAR decode (shown in the station popup under the raw report) ---- */
 var METAR_WX = {
   TS:"thunderstorm", SH:"showers of", FZ:"freezing", BL:"blowing", DR:"drifting",
@@ -1974,9 +2125,9 @@ window.addEventListener("beforeunload", function () {
 });
 
 document.getElementById("refresh").addEventListener("click", function () {
-  var src = document.getElementById("product").options[document.getElementById("product").selectedIndex].getAttribute("data-src");
-  if (src === "rv") loadRainViewer();
-  else if (src === "precip" || src === "mrms") applyProduct();   // re-request the layer
+  var src = currentProductSrc();
+  if (src === "rv" || src === "sat") loadRainViewer();
+  else if (src === "precip" || src === "mrms") applyProduct();   // re-request the layer + loop
   eetCache = {}; dvlCache = {}; alertsCache = null; geoCache = {};  // force-refresh Level III + alerts + vectors
   loadWarnings();
   loadOutlook(); loadWatches(); loadMetar();          // no-ops when their toggles are off
@@ -2078,7 +2229,7 @@ map.on("popupclose", function () { alertHoverLayer.clearLayers(); });   // drop 
 var PREFS_KEY = "classicRadar.prefs.v1";
 var PREF_CHECKS = ["c-base","c-county","c-hwy","c-city","c-warn","c-alerts","c-cells","c-tracks",
                    "c-tops","c-watches","c-outlook","c-metar","c-sites","c-iem",
-                   "c-autorefresh","c-chime"];
+                   "c-autorefresh","c-chime","c-ptfcst"];
 var PREF_SELECTS = ["product","frames","speed","dwell","network"];
 var restoredView = false;
 
