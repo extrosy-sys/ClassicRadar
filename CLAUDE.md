@@ -405,3 +405,10 @@ mid-transition in the automated Browser-pane preview, which throttles animation 
   motion + forecast tracks drawn, raw storm text in the Level III Text tab. Table↔map link intact.
 - PLAY animates the RainViewer historical loop (12→3 frame advance confirmed).
 - The Browser-pane screenshot tool times out on the live-tile map — verify via DOM/JS introspection.
+
+## Composite loops (2026-08-02): at national zoom (enhanced, z<=6) every loop uses ONE
+pre-composited image per frame (`/frame/{prod}/{ts}.png`, L.imageOverlay double-buffer,
+`useComposite`/`makeCompBuffers`/`frameUrlFor`, zoomend crossing rebuilds) — atomic frames, no
+tile flicker possible. Tiles (load-gated, pre-reveal retry, dead-frame skip, fadeAnimation off)
+remain for zoomed-in + keyless. `window.CR_MAP` = deliberate debug handle for automated checks
+(pane never finishes animated zooms — always pass {animate:false}).

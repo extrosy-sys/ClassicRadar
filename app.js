@@ -30,6 +30,7 @@ var map = L.map("map", {
   maxBoundsViscosity: 0.9,
   attributionControl: true
 });
+window.CR_MAP = map;   // deliberate debug handle — automated verification drives zoom/center with it
 map.attributionControl.setPrefix(false);
 L.control.zoom({ position: "bottomleft" }).addTo(map);
 
@@ -216,6 +217,7 @@ function srvSetState(url, health) {
   SRV.url = url; SRV.up = !!health; SRV.fails = 0;
   SRV.mrms = (health && health.caps && health.caps.mrms) || [];
   SRV.synoptic = !!(health && health.caps && health.caps.synoptic);
+  SRV.comp = (health && health.caps && health.caps.composite) || null;
   var badge = document.getElementById("srvbadge");
   if (badge) {
     badge.style.display = SRV.up ? "" : "none";
@@ -322,7 +324,7 @@ function clearFrames() {
   buffers.forEach(function (l) { map.removeLayer(l); });
   buffers = []; frontBuf = 0;
   frameUrls = []; frameTimes = [];
-  deadFrames = {}; wantedFrame = -1;
+  deadFrames = {}; wantedFrame = -1; loopMode = "tiles";
 }
 
 /* RainViewer is only a ~2 km mosaic (native z7), so it turns to coarse blocks when zoomed
@@ -537,28 +539,73 @@ function makeBuffers(maxNative, attribution, label) {
   if (!frameUrls.length) return;
   var lastUrl = frameUrls[frameUrls.length - 1];
   for (var bi = 0; bi < 2; bi++) {
-    var lyr = attachRetry(L.tileLayer(lastUrl, { pane:"radar", opacity:0, maxZoom:18,
-      maxNativeZoom:maxNative, noWrap:true, attribution:attribution }), label).addTo(map);
+    // NOTE: no attachRetry here on purpose — its out-of-band per-tile retries land AFTER the
+    // frame is revealed (visible pop). Loop buffers retry as a whole, BEFORE reveal, below.
+    var lyr = L.tileLayer(lastUrl, { pane:"radar", opacity:0, maxZoom:18,
+      maxNativeZoom:maxNative, noWrap:true, attribution:attribution }).addTo(map);
     lyr._crFrame = frameUrls.length - 1;
-    // load-gating state: a frame is only revealed once ALL its tiles are in (no half-loaded
-    // flash), and a frame whose every tile errors (missing upstream imagery) is marked dead
-    // and skipped instead of blanking the map.
+    // load-gating: a frame is revealed only when ALL its tiles are in. A frame that finished
+    // with errored tiles gets ONE silent full retry first (cached tiles come back instantly,
+    // only the failures refetch); if every tile still errors the frame is dead and skipped.
     lyr._crLoaded = false;
-    lyr.on("loading", function () { this._crOk = 0; this._crErr = 0; });
+    lyr.on("loading", function () { this._crOk = 0; this._crErr = 0; setTileStatus(label + " — loading tiles…", "load"); });
     lyr.on("tileload", function () { this._crOk++; });
     lyr.on("tileerror", function () { this._crErr++; });
     lyr.on("load", function () {
+      if (this._crErr > 0 && !this._crRetried) {
+        this._crRetried = true;
+        var self = this;
+        setTimeout(function () { self.redraw(); }, 250);   // whole-frame retry BEFORE reveal
+        return;
+      }
+      setTileStatus("", "ok");
       this._crLoaded = true;
       if (this._crOk === 0 && this._crErr > 0) deadFrames[this._crFrame] = true;
       onBufferLoad(this);
     });
     buffers.push(lyr);
   }
+  loopMode = "tiles";
 }
 function setBufferFrame(lyr, idx) {
   lyr._crLoaded = false;
+  lyr._crRetried = false;
   lyr._crFrame = idx;
   lyr.setUrl(frameUrls[idx]);
+}
+
+var loopMode = "tiles";   // "tiles" (per-tile buffers) | "comp" (whole-CONUS composite images)
+
+/* Enhanced + zoomed out: the loop uses the server's pre-composited whole-CONUS frames —
+   ONE image per frame (an L.imageOverlay double-buffer), so a frame either shows complete
+   or not at all. Structurally flicker-free; this is how the classic WU loops worked. */
+function useComposite() {
+  return SRV.up && SRV.comp && map.getZoom() <= SRV.comp.maxZoom;
+}
+function makeCompBuffers(attribution) {
+  if (!frameUrls.length || !SRV.comp) return;
+  var b = [[SRV.comp.s, SRV.comp.w], [SRV.comp.n, SRV.comp.e]];
+  var lastUrl = frameUrls[frameUrls.length - 1];
+  for (var bi = 0; bi < 2; bi++) {
+    var ov = L.imageOverlay(lastUrl, b, { pane:"radar", opacity:0, interactive:false, attribution:attribution });
+    ov.addTo(map);
+    ov._crFrame = frameUrls.length - 1;
+    ov._crLoaded = false;
+    ov.on("load", function () { this._crLoaded = true; setTileStatus("", "ok"); onBufferLoad(this); });
+    ov.on("error", function () {   // whole frame missing upstream -> dead, skip
+      deadFrames[this._crFrame] = true;
+      this._crLoaded = true;
+      onBufferLoad(this);
+    });
+    buffers.push(ov);
+  }
+  loopMode = "comp";
+}
+/* frame URL template for the active mode; composite needs no {z}/{x}/{y} */
+function frameUrlFor(prodPath, ts) {
+  return useComposite()
+    ? SRV.url + "/frame/" + prodPath + "/" + ts + ".png"
+    : SRV.url + "/tiles/" + prodPath + (prodPath.indexOf("mrms/") === 0 ? "/at/" : "/") + ts + "/{z}/{x}/{y}.png";
 }
 
 var loopReq = 0;   // stale-load guard: only the NEWEST loop request may install frames
@@ -643,12 +690,13 @@ function loadSatLoop() {
   list.forEach(function (secs) {
     var ts = unixToTs(secs);
     frameUrls.push(SRV.up
-      ? SRV.url + "/tiles/" + kind + "/" + ts + "/{z}/{x}/{y}.png"
+      ? frameUrlFor(kind, ts)
       : g.url.replace("/default/default/", "/default/" + TS_ISO(ts) + "/"));
     frameTimes.push(secs);
   });
   if (req !== loopReq) return Promise.resolve(false);
-  makeBuffers(g.maxNative, "Satellite &copy; NASA GIBS / NOAA GOES-East", "GOES loop");
+  if (useComposite()) makeCompBuffers("Satellite &copy; NASA GIBS / NOAA GOES-East");
+  else makeBuffers(g.maxNative, "Satellite &copy; NASA GIBS / NOAA GOES-East", "GOES loop");
   curFrame = frameUrls.length - 1;
   wireScrub();
   goLive();
@@ -674,10 +722,11 @@ function loadMrmsLoop() {
       var list = j.frames || [];
       if (spec.take && list.length > spec.take) list = list.slice(-spec.take);
       list.forEach(function (ts) {
-        frameUrls.push(SRV.url + "/tiles/mrms/" + id + "/at/" + ts + "/{z}/{x}/{y}.png");
+        frameUrls.push(frameUrlFor("mrms/" + id, ts));
         frameTimes.push(tsToUnix(ts));
       });
-      makeBuffers(9, "MRMS &copy; NOAA/NSSL via enhancement server", "MRMS loop");
+      if (useComposite()) makeCompBuffers("MRMS &copy; NOAA/NSSL via enhancement server");
+      else makeBuffers(9, "MRMS &copy; NOAA/NSSL via enhancement server", "MRMS loop");
       curFrame = frameUrls.length - 1;
       wireScrub();
       goLive();
@@ -695,10 +744,11 @@ function loadServerLoop(conf) {
       var list = j.frames || [];
       if (conf.take && list.length > conf.take) list = list.slice(-conf.take);
       list.forEach(function (ts) {
-        frameUrls.push(SRV.url + "/tiles/n0q/" + ts + "/{z}/{x}/{y}.png");
+        frameUrls.push(frameUrlFor("n0q", ts));
         frameTimes.push(tsToUnix(ts));
       });
-      makeBuffers(12, "Radar archive &copy; IEM via enhancement server", "Server loop");
+      if (useComposite()) makeCompBuffers("Radar archive &copy; IEM via enhancement server");
+      else makeBuffers(12, "Radar archive &copy; IEM via enhancement server", "Server loop");
       curFrame = frameUrls.length - 1;
       wireScrub();
       goLive();
@@ -2291,6 +2341,13 @@ map.on("moveend", function () {
   }, 500);
 });
 map.on("popupclose", function () { alertHoverLayer.clearLayers(); });   // drop any picker hover preview
+map.on("zoomend", function () {
+  // crossing the composite threshold changes how loop frames are built -> rebuild the loop
+  if (!buffers.length || !SRV.up || !SRV.comp) return;
+  var want = map.getZoom() <= SRV.comp.maxZoom ? "comp" : "tiles";
+  var src = currentProductSrc();
+  if (want !== loopMode && (src === "rv" || src === "sat" || src === "mrms")) loadRainViewer();
+});
 
 /* ===================== PERSISTENCE (localStorage) =====================
    Remember the user's map controls + view across reloads. localStorage (not a cookie):
