@@ -429,6 +429,16 @@ mid-transition in the automated Browser-pane preview, which throttles animation 
   — 3 path segments vs the server's 2-segment route → every national-zoom MRMS composite frame
   404'd and dead-skipped. `frameUrlFor` now strips the `mrms/` prefix for composites.
 
+## Animated winds (2026-08-02): product optgroup "Winds — animated" at sfc/850/700/500/250 —
+flowing particles colored by speed (kt, `WIND_RAMP`, opacity slider applies) on a canvas in the
+`wind` pane (z336). ◆ enhanced = the server's 0.5° GFS grid (`/api/wind`); keyless = a coarse
+17×9 Open-Meteo batch grid (`windFromOpenMeteo`, m/s, meteorological FROM-direction →
+u=−s·sin, v=−s·cos) — works on the bare Pages copy. Bilinear `windSample`; screen→lat/lon is
+LINEARIZED per view (`windRebuild`) so the rAF loop makes zero Leaflet calls; pan/zoom halts +
+reseeds; trails fade via `destination-in` alpha fill. `window.CR_WIND` = deliberate debug handle
+(step/sample/parts) because the automated pane NEVER fires requestAnimationFrame
+(document.hidden) — drive `CR_WIND.step(30)` and pixel-count the canvas to verify.
+
 ## Composite loops (2026-08-02): at national zoom (enhanced, z<=6) every loop uses ONE
 pre-composited image per frame (`/frame/{prod}/{ts}.png`, L.imageOverlay double-buffer,
 `useComposite`/`makeCompBuffers`/`frameUrlFor`, zoomend crossing rebuilds) — atomic frames, no

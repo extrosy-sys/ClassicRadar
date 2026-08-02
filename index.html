@@ -66,6 +66,13 @@
               <option value="P24H" data-src="precip" data-rule="rft_24hr">Total precip &mdash; 24&nbsp;hr (in)</option>
               <option value="P72H" data-src="precip" data-rule="rft_72hr">Storm total &mdash; 72&nbsp;hr (in)</option>
             </optgroup>
+            <optgroup label="Winds &mdash; animated">
+              <option value="WSFC" data-src="wind" data-wlevel="sfc">Wind &mdash; surface (10&nbsp;m)</option>
+              <option value="W850" data-src="wind" data-wlevel="850">Wind &mdash; 850&nbsp;mb (&#8776;5,000&nbsp;ft)</option>
+              <option value="W700" data-src="wind" data-wlevel="700">Wind &mdash; 700&nbsp;mb (&#8776;10,000&nbsp;ft)</option>
+              <option value="W500" data-src="wind" data-wlevel="500">Wind &mdash; 500&nbsp;mb (&#8776;18,000&nbsp;ft)</option>
+              <option value="W250" data-src="wind" data-wlevel="250">Wind &mdash; 250&nbsp;mb (jet stream)</option>
+            </optgroup>
             <optgroup label="Severe weather &mdash; needs server" id="srv-products">
               <option value="MMESH" data-src="mrms" data-mrms="mesh" class="srvopt" disabled>&#9670; Hail size &mdash; MESH (mm)</option>
               <option value="MVIL" data-src="mrms" data-mrms="vil" class="srvopt" disabled>&#9670; VIL grid (kg/m&sup2;)</option>

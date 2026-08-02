@@ -44,6 +44,7 @@ function Pq(sel) { return panelDoc.querySelector(sel); }
 function pane(name, z) { map.createPane(name); map.getPane(name).style.zIndex = z; }
 pane("radar", 250);
 pane("velocity", 260);
+pane("wind", 336);            // animated wind-particle canvas (above radar, below vectors)
 pane("outlook", 340);         // SPC convective-outlook risk areas (background)
 pane("tropical", 344);        // NHC cones/tracks/points (background, above outlook)
 pane("clutter", 350);
@@ -1004,6 +1005,165 @@ function rvNote() {
     "); ◉ LIVE returns to the current still.";
 }
 
+/* ===================== ANIMATED WINDS (flowing particles, color = speed) =====================
+   ◆ enhanced = GFS 0.5° U/V grids from the server (/api/wind, NOMADS-decoded);
+   keyless = a coarse Open-Meteo grid built from one batch call — works everywhere. */
+var WIND_RAMP = [[0,"#4a7aae"],[10,"#2ecc40"],[20,"#a0e632"],[30,"#f7e01a"],[40,"#f0a000"],
+                 [50,"#f0401a"],[70,"#c81ac8"],[100,"#ff80ff"],[130,"#ffffff"]];   // kt thresholds
+var WIND_PX = 0.09;            // screen px per (m/s) per frame — visual pacing, zoom-independent
+function windColor(kt) {
+  var c = WIND_RAMP[0][1];
+  for (var i = 0; i < WIND_RAMP.length; i++) { if (kt >= WIND_RAMP[i][0]) c = WIND_RAMP[i][1]; else break; }
+  return c;
+}
+var windField = null, windCanvas = null, windView = null, windAnim = 0, windParts = [], windReq = 0;
+
+function windSample(lat, lon) {        // bilinear [u,v] m/s, or null off-grid
+  var f = windField;
+  if (!f) return null;
+  var gx = (lon - f.lo1) / f.dlon, gy = (lat - f.la1) / f.dlat;
+  var x0 = Math.floor(gx), y0 = Math.floor(gy);
+  if (x0 < 0 || y0 < 0 || x0 >= f.nx - 1 || y0 >= f.ny - 1) return null;
+  var fx = gx - x0, fy = gy - y0;
+  var i00 = y0 * f.nx + x0, i10 = i00 + 1, i01 = i00 + f.nx, i11 = i01 + 1;
+  return [f.u[i00]*(1-fx)*(1-fy) + f.u[i10]*fx*(1-fy) + f.u[i01]*(1-fx)*fy + f.u[i11]*fx*fy,
+          f.v[i00]*(1-fx)*(1-fy) + f.v[i10]*fx*(1-fy) + f.v[i01]*(1-fx)*fy + f.v[i11]*fx*fy];
+}
+function windHalt() { if (windAnim) { cancelAnimationFrame(windAnim); windAnim = 0; } }
+function clearWind() {
+  windReq++;
+  windHalt();
+  windField = null;
+  windParts = [];
+  if (windCanvas) { windCanvas.parentNode.removeChild(windCanvas); windCanvas = null; }
+  map.off("movestart", windHalt); map.off("moveend", windRebuild);
+  map.off("zoomstart", windHalt); map.off("zoomend", windRebuild);
+}
+function showWind(level) {
+  clearWind();
+  var req = ++windReq;
+  var pSrv = SRV.up
+    ? fetch(SRV.url + "/api/wind?level=" + level)
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (j) { j.fine = true; return j; })
+        .catch(function () { return null; })
+    : Promise.resolve(null);
+  setTileStatus("loading wind field…", "load");
+  pSrv.then(function (j) { return j || windFromOpenMeteo(level); }).then(function (j) {
+    if (req !== windReq) return;
+    if (!j) { setTileStatus("wind data unavailable", "err"); return; }
+    setTileStatus("", "ok");
+    windField = j;
+    buildWindCanvas();
+    showWindKey();
+    document.getElementById("stamp").textContent =
+      (j.fine ? "GFS " : "≈ ") + (j.label || level) + (j.time ? " · " + j.time.slice(11, 16) + "Z" : "");
+    var note = document.getElementById("prodnote");
+    if (note) note.textContent = "Animated wind at " + (j.label || level) +
+      " — flowing particles colored by speed (kt), opacity slider applies. " +
+      (j.fine ? "◆ GFS 0.5° grid via the enhancement server."
+              : "Coarse keyless grid (Open-Meteo); the ◆ server provides a finer GFS grid.");
+  });
+}
+function windFromOpenMeteo(level) {
+  var NX = 17, NY = 9, LA0 = 24, LO0 = -125;
+  var dlat = (50 - LA0) / (NY - 1), dlon = (-66 - LO0) / (NX - 1);
+  var la = [], lo = [];
+  for (var y = 0; y < NY; y++) for (var x = 0; x < NX; x++) {
+    la.push((LA0 + y * dlat).toFixed(2)); lo.push((LO0 + x * dlon).toFixed(2));
+  }
+  var sk = level === "sfc" ? "wind_speed_10m" : "wind_speed_" + level + "hPa";
+  var dk = level === "sfc" ? "wind_direction_10m" : "wind_direction_" + level + "hPa";
+  return fetch("https://api.open-meteo.com/v1/forecast?latitude=" + la.join(",") + "&longitude=" + lo.join(",") +
+      "&hourly=" + sk + "," + dk + "&wind_speed_unit=ms&forecast_days=1&timezone=UTC")
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function (arr) {
+      if (!(arr instanceof Array)) arr = [arr];
+      var hr = new Date().getUTCHours();
+      var u = [], v = [];
+      for (var i = 0; i < arr.length; i++) {
+        var h = arr[i].hourly, s = h[sk][hr], d = h[dk][hr];
+        if (s == null || d == null) { u.push(0); v.push(0); continue; }
+        var rad = d * Math.PI / 180;                 // meteorological: direction wind blows FROM
+        u.push(-s * Math.sin(rad)); v.push(-s * Math.cos(rad));
+      }
+      return { nx: NX, ny: NY, la1: LA0, lo1: LO0, dlat: dlat, dlon: dlon, u: u, v: v,
+               label: level === "sfc" ? "surface (10 m)" : level + " mb", time: null, fine: false };
+    })
+    .catch(function () { return null; });
+}
+function buildWindCanvas() {
+  windCanvas = document.createElement("canvas");
+  windCanvas.style.pointerEvents = "none";
+  map.getPane("wind").appendChild(windCanvas);
+  map.on("movestart", windHalt); map.on("moveend", windRebuild);
+  map.on("zoomstart", windHalt); map.on("zoomend", windRebuild);
+  windRebuild();
+}
+function windRebuild() {
+  if (!windCanvas || !windField) return;
+  var size = map.getSize();
+  windCanvas.width = size.x; windCanvas.height = size.y;
+  L.DomUtil.setPosition(windCanvas, map.containerPointToLayerPoint([0, 0]));
+  // linearized screen->lat/lon for cheap per-particle sampling (error over one view is tiny)
+  var nw = map.containerPointToLatLng([0, 0]), se = map.containerPointToLatLng([size.x, size.y]);
+  windView = { lat0: nw.lat, lon0: nw.lng, dlat: (se.lat - nw.lat) / size.y,
+               dlon: (se.lng - nw.lng) / size.x, w: size.x, h: size.y };
+  var n = Math.min(1400, Math.round(size.x * size.y / 1200));
+  windParts = [];
+  for (var i = 0; i < n; i++) windParts.push(windPart());
+  windStart();
+}
+function windPart() {
+  return { x: Math.random() * windView.w, y: Math.random() * windView.h, age: Math.floor(Math.random() * 80) };
+}
+function windFrame() {           // one animation step (also driven directly by CR_WIND.step)
+  if (!windCanvas || !windField || !windView) return;
+  var ctx = windCanvas.getContext("2d");
+  ctx.lineWidth = 1.4;
+  ctx.globalCompositeOperation = "destination-in";   // fade existing trails
+  ctx.fillStyle = "rgba(0,0,0,0.93)";
+  ctx.fillRect(0, 0, windView.w, windView.h);
+  ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = radarOpacity();
+  for (var i = 0; i < windParts.length; i++) {
+    var p = windParts[i];
+    if (p.age > 90 || p.x < 0 || p.y < 0 || p.x > windView.w || p.y > windView.h) { windParts[i] = windPart(); continue; }
+    var uv = windSample(windView.lat0 + p.y * windView.dlat, windView.lon0 + p.x * windView.dlon);
+    if (!uv) { windParts[i] = windPart(); continue; }
+    var kt = Math.sqrt(uv[0] * uv[0] + uv[1] * uv[1]) * 1.94384;
+    var dx = uv[0] * WIND_PX, dy = -uv[1] * WIND_PX;
+    ctx.strokeStyle = windColor(kt);
+    ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + dx, p.y + dy); ctx.stroke();
+    p.x += dx; p.y += dy; p.age++;
+  }
+  ctx.globalAlpha = 1;
+}
+function windStart() {
+  windHalt();
+  function tick() { windFrame(); windAnim = requestAnimationFrame(tick); }
+  windAnim = requestAnimationFrame(tick);
+}
+/* deliberate debug handle (like CR_MAP): the automated pane never fires rAF (document.hidden),
+   so verification drives frames synchronously */
+window.CR_WIND = {
+  step: function (n) { for (var i = 0; i < (n || 1); i++) windFrame(); },
+  sample: function (lat, lon) { return windSample(lat, lon); },
+  parts: function () { return windParts.length; }
+};
+function showWindKey() {
+  var el = document.getElementById("precipkey");
+  if (!el) return;
+  var ramp = "", ticks = "";
+  for (var i = 0; i < WIND_RAMP.length; i++)
+    ramp += '<span class="pk-box" title="' + WIND_RAMP[i][0] + ' kt" style="background:' + WIND_RAMP[i][1] + '"></span>';
+  var idx = [0, Math.floor(WIND_RAMP.length / 2), WIND_RAMP.length - 1];
+  for (var k = 0; k < idx.length; k++) ticks += "<span>" + WIND_RAMP[idx[k]][0] + "</span>";
+  el.innerHTML = '<div class="pk-title">wind kt</div><div class="pk-ramp">' + ramp +
+    '</div><div class="pk-scale">' + ticks + "</div>";
+  el.style.display = "block";
+}
+
 /* --- product switch: reflectivity products animate the RainViewer loop;
    the crisp IEM true-dBZ still is a separate toggle (c-iem). --- */
 function applyProduct() {
@@ -1013,7 +1173,7 @@ function applyProduct() {
   var note = document.getElementById("prodnote");
   pause();
   if (srvActive) closeSingleRadar(false);                // changing product drops the single-radar overlay
-  clearPrecip(); clearPrecipKey(); clearMrms();          // and any MRMS precip/severe layer + key
+  clearPrecip(); clearPrecipKey(); clearMrms(); clearWind();   // and any MRMS/wind layer + key
   document.getElementById("legend").style.display = (src === "rv") ? "" : "none";  // dBZ scale is refl-only
 
   if (src === "rv") {
@@ -1051,6 +1211,11 @@ function applyProduct() {
       note.textContent = "Requires the enhancement server (not connected).";
       document.getElementById("stamp").textContent = "server n/a";
     }
+  } else if (src === "wind") {
+    clearSat(); clearFrames();
+    setPlaybar(false);
+    document.getElementById("stamp").textContent = "loading winds…";
+    showWind(opt.getAttribute("data-wlevel"));
   } else if (src === "d3") {
     // volumetric launcher: reset the map product to reflectivity, open the 3D view
     clearSat();
