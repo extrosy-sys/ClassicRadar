@@ -201,20 +201,39 @@ function srvProbe(url, cb) {
     .then(function (j) { if (!done) { done = true; clearTimeout(t); cb(j && j.ok ? j : null); } })
     .catch(function () { if (!done) { done = true; clearTimeout(t); cb(null); } });
 }
+/* one-line inventory of what the server is currently providing (badge tooltip + status) */
+function srvCapsSummary() {
+  var parts = ["slim alerts", "aviation METARs", "24-h archive loop"];
+  if (SRV.mrms.length) parts.push("MRMS " + SRV.mrms.map(function (p) {
+    return p.id + (p.valid ? " " + p.valid.slice(11, 16) + "Z" : "");
+  }).join("/"));
+  return parts.join(" · ");
+}
 function srvSetState(url, health) {
   SRV.url = url; SRV.up = !!health; SRV.fails = 0;
   SRV.mrms = (health && health.caps && health.caps.mrms) || [];
   var badge = document.getElementById("srvbadge");
-  if (badge) badge.style.display = SRV.up ? "" : "none";
+  if (badge) {
+    badge.style.display = SRV.up ? "" : "none";
+    badge.title = SRV.up ? "Server-provided: " + srvCapsSummary() : "";
+  }
+  // server-only options stay VISIBLE either way — green ◆ when live, grayed when not —
+  // so it's always clear what enhanced mode adds
   var og = document.getElementById("srv-products");
-  if (og) og.style.display = SRV.up && SRV.mrms.length ? "" : "none";
-  [].forEach.call(document.querySelectorAll("#srv-products option"), function (o) { o.disabled = !SRV.up; });
+  if (og) og.label = SRV.up ? "Severe weather — ◆ server" : "Severe weather — needs server";
   var fg = document.getElementById("srv-frames");
-  if (fg) fg.style.display = SRV.up ? "" : "none";
-  [].forEach.call(document.querySelectorAll("#srv-frames option"), function (o) { o.disabled = !SRV.up; });
+  if (fg) fg.label = SRV.up ? "Archive loop — ◆ server" : "Archive loop — needs server";
+  [].forEach.call(document.querySelectorAll("option.srvopt"), function (o) { o.disabled = !SRV.up; });
+  var mt = document.getElementById("tag-metar");
+  if (mt) { mt.textContent = SRV.up ? "◆ AWC" : ""; mt.title = SRV.up ? "Obs from aviationweather.gov via the enhancement server" : ""; }
   var st = document.getElementById("server-status");
-  if (st) st.textContent = SRV.up ? "Enhanced server connected: " + url
-    : (url ? "Server unreachable — running keyless." : "No server configured — running keyless.");
+  if (st) {
+    st.textContent = SRV.up ? "◆ Connected: " + url + " — " + srvCapsSummary()
+      : (url ? "Server unreachable — running keyless." : "No server configured — running keyless.");
+    st.className = SRV.up ? "hint srv-on" : "hint";
+  }
+  var atab = P("tab-alerts");        // flip the tab's ◆ immediately, not on the next render
+  if (atab) atab.textContent = atab.textContent.replace(" ◆", "") + (SRV.up ? " ◆" : "");
   if (!SRV.up) {
     // if a server-only selection is active, drop back to the keyless equivalents
     var prod = document.getElementById("product");
@@ -1445,7 +1464,7 @@ function renderAlerts(features) {
   drawAlertPolys();
   buildAlertsTable();
   var atab = P("tab-alerts");
-  if (atab) atab.textContent = "Alerts (" + alertsData.length + ")";
+  if (atab) atab.textContent = "Alerts (" + alertsData.length + ")" + (SRV.up ? " ◆" : "");
   reapplyAlertSelection();
 }
 

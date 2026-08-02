@@ -66,10 +66,10 @@
               <option value="P24H" data-src="precip" data-rule="rft_24hr">Total precip &mdash; 24&nbsp;hr (in)</option>
               <option value="P72H" data-src="precip" data-rule="rft_72hr">Storm total &mdash; 72&nbsp;hr (in)</option>
             </optgroup>
-            <optgroup label="Severe weather (server)" id="srv-products" style="display:none">
-              <option value="MMESH" data-src="mrms" data-mrms="mesh" disabled>Hail size &mdash; MESH (mm)</option>
-              <option value="MVIL" data-src="mrms" data-mrms="vil" disabled>VIL grid (kg/m&sup2;)</option>
-              <option value="MROT" data-src="mrms" data-mrms="rot" disabled>Rotation tracks &mdash; 60 min</option>
+            <optgroup label="Severe weather &mdash; needs server" id="srv-products">
+              <option value="MMESH" data-src="mrms" data-mrms="mesh" class="srvopt" disabled>&#9670; Hail size &mdash; MESH (mm)</option>
+              <option value="MVIL" data-src="mrms" data-mrms="vil" class="srvopt" disabled>&#9670; VIL grid (kg/m&sup2;)</option>
+              <option value="MROT" data-src="mrms" data-mrms="rot" class="srvopt" disabled>&#9670; Rotation tracks &mdash; 60 min</option>
             </optgroup>
             <optgroup label="Volumetric (open 3D)">
               <option value="V-REF" data-src="d3" data-prod="refl">Reflectivity tilts &rarr; 3D</option>
@@ -96,10 +96,10 @@
           <label>Frames</label>
           <select id="frames" class="full">
             <option>6</option><option selected>12</option><option>18</option><option>24</option>
-            <optgroup label="Archive loop (server)" id="srv-frames" style="display:none">
-              <option value="s3h" disabled>3 h &mdash; 5-min frames</option>
-              <option value="s6h" disabled>6 h &mdash; 10-min frames</option>
-              <option value="s24h" disabled>24 h &mdash; 30-min frames</option>
+            <optgroup label="Archive loop &mdash; needs server" id="srv-frames">
+              <option value="s3h" class="srvopt" disabled>&#9670; 3 h &mdash; 5-min frames</option>
+              <option value="s6h" class="srvopt" disabled>&#9670; 6 h &mdash; 10-min frames</option>
+              <option value="s24h" class="srvopt" disabled>&#9670; 24 h &mdash; 30-min frames</option>
             </optgroup>
           </select>
         </div>
@@ -137,7 +137,7 @@
         <div class="checkline"><input type="checkbox" id="c-tops"><label for="c-tops">Storm-top callouts (EET)</label></div>
         <div class="checkline"><input type="checkbox" id="c-watches"><label for="c-watches">SPC watches (TOR/SVR)</label></div>
         <div class="checkline"><input type="checkbox" id="c-outlook"><label for="c-outlook">SPC convective outlook</label></div>
-        <div class="checkline"><input type="checkbox" id="c-metar"><label for="c-metar">Surface obs (METAR)</label></div>
+        <div class="checkline"><input type="checkbox" id="c-metar"><label for="c-metar">Surface obs (METAR)<span class="srvtag" id="tag-metar"></span></label></div>
         <div class="checkline"><input type="checkbox" id="c-sites" checked><label for="c-sites">Radar site icons</label></div>
         <div class="checkline"><input type="checkbox" id="c-iem"><label for="c-iem">Force IEM true-dBZ still</label></div>
         <div class="checkline"><input type="checkbox" id="c-autorefresh" checked><label for="c-autorefresh">Auto-refresh (2 min)</label></div>
@@ -169,8 +169,9 @@
         </div>
         <button class="act" id="server-apply">Connect / save</button>
         <p class="hint" id="server-status">No server configured &mdash; running keyless.</p>
-        <p class="hint">Optional ClassicRadarServer: slim alerts, aviation METARs, MRMS severe
-          grids, 24-h archive loop. The site works fully without it.</p>
+        <p class="hint"><span class="srvtag">&#9670;</span> marks features provided by the optional
+          ClassicRadarServer (they gray out without it). It also upgrades alerts (95% smaller
+          payloads) and METARs (aviationweather.gov). The site works fully without it.</p>
       </div>
     </div>
 

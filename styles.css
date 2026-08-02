@@ -531,3 +531,9 @@ table.storm tbody tr.mk-hi { background: #cfe0ff !important; }
 
 /* MRMS severe-grid color key chips (rendered into #precipkey) */
 #precipkey .pk-box { width: 11px; height: 11px; display: block; }
+
+/* ===== "provided by the enhancement server" tags ===== */
+option.srvopt { color: #1f7a33; font-weight: bold; }
+option.srvopt:disabled { color: #9aa7b5; font-weight: normal; }
+.srvtag { color: #1f7a33; font: bold 10px/1 Arial, sans-serif; margin-left: 5px; white-space: nowrap; }
+#server-status.srv-on { color: #1f7a33; }
