@@ -13,6 +13,8 @@
   <button id="menubtn" aria-label="Toggle controls">&#9776;</button>
   <h1>CLASSIC RADAR</h1>
   <span class="tag">NEXRAD / TDWR product selector &mdash; live NWS &amp; IEM data</span>
+  <span id="srvbadge" title="Enhancement server connected" style="display:none">&#9679; ENHANCED</span>
+  <span id="autonext" title="Next auto-refresh"></span>
   <span class="clock" id="clock">--:--:-- UTC</span>
 </div>
 
@@ -64,6 +66,11 @@
               <option value="P24H" data-src="precip" data-rule="rft_24hr">Total precip &mdash; 24&nbsp;hr (in)</option>
               <option value="P72H" data-src="precip" data-rule="rft_72hr">Storm total &mdash; 72&nbsp;hr (in)</option>
             </optgroup>
+            <optgroup label="Severe weather (server)" id="srv-products" style="display:none">
+              <option value="MMESH" data-src="mrms" data-mrms="mesh" disabled>Hail size &mdash; MESH (mm)</option>
+              <option value="MVIL" data-src="mrms" data-mrms="vil" disabled>VIL grid (kg/m&sup2;)</option>
+              <option value="MROT" data-src="mrms" data-mrms="rot" disabled>Rotation tracks &mdash; 60 min</option>
+            </optgroup>
             <optgroup label="Volumetric (open 3D)">
               <option value="V-REF" data-src="d3" data-prod="refl">Reflectivity tilts &rarr; 3D</option>
               <option value="V-VEL" data-src="d3" data-prod="vel">Velocity tilts &rarr; 3D</option>
@@ -89,6 +96,11 @@
           <label>Frames</label>
           <select id="frames" class="full">
             <option>6</option><option selected>12</option><option>18</option><option>24</option>
+            <optgroup label="Archive loop (server)" id="srv-frames" style="display:none">
+              <option value="s3h" disabled>3 h &mdash; 5-min frames</option>
+              <option value="s6h" disabled>6 h &mdash; 10-min frames</option>
+              <option value="s24h" disabled>24 h &mdash; 30-min frames</option>
+            </optgroup>
           </select>
         </div>
         <div class="row">
@@ -128,6 +140,8 @@
         <div class="checkline"><input type="checkbox" id="c-metar"><label for="c-metar">Surface obs (METAR)</label></div>
         <div class="checkline"><input type="checkbox" id="c-sites" checked><label for="c-sites">Radar site icons</label></div>
         <div class="checkline"><input type="checkbox" id="c-iem"><label for="c-iem">Force IEM true-dBZ still</label></div>
+        <div class="checkline"><input type="checkbox" id="c-autorefresh" checked><label for="c-autorefresh">Auto-refresh (2 min)</label></div>
+        <div class="checkline"><input type="checkbox" id="c-chime"><label for="c-chime">Chime on new warning</label></div>
         <div class="row" style="margin-top:6px">
           <label>Radar opacity</label>
           <input type="range" id="opacity" min="20" max="100" value="80" class="full">
@@ -143,6 +157,20 @@
         <button class="act" id="mylocation">My location (GPS)</button>
         <button class="act" id="view3d">3D volumetric view</button>
         <p class="hint" id="datastatus">Initializing&hellip;</p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Enhancement Server</h2>
+      <div class="body">
+        <div class="row">
+          <label>URL</label>
+          <input type="text" id="server-url" class="full" placeholder="http://vm-name:8778 (optional)">
+        </div>
+        <button class="act" id="server-apply">Connect / save</button>
+        <p class="hint" id="server-status">No server configured &mdash; running keyless.</p>
+        <p class="hint">Optional ClassicRadarServer: slim alerts, aviation METARs, MRMS severe
+          grids, 24-h archive loop. The site works fully without it.</p>
       </div>
     </div>
 

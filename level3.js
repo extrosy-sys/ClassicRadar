@@ -130,6 +130,60 @@ window.Level3 = {
   /** dBZ from a digital reflectivity level (product 153/94): 0.5*level - 33, else null. */
   levelToDbz: function (v) { return v >= 2 ? 0.5 * v - 33 : null; },
 
+  /** NEXRAD custom 16-bit float (sign/5-bit exp/10-bit mantissa) used by DVL's scale halfwords. */
+  _f16: function (x) {
+    if (x < 0) x += 65536;
+    var s = (x >> 15) & 1, e = (x >> 10) & 0x1f, f = x & 0x3ff;
+    var v = e === 0 ? Math.pow(2, -16) * (f / 1024) : Math.pow(2, e - 16) * (1 + f / 1024);
+    return s ? -v : v;
+  },
+
+  /** Fetch + decode the current Digital VIL (DVL, product 134) and return a sampler.
+      Same bzip2 packet-16 radials as EET (360 x 460 1-km gates); the VIL transform's
+      constants live in PDB threshold halfwords 31-35 (custom float16): below `logStart`
+      VIL = (L - off)/scale, above it VIL = e^((L - logOff)/logScale). Verified live at
+      KLZK: scale 90.6875 / off 2 / start 20 / logScale 38.875 / logOff 83.875 —
+      continuous at the boundary, ~79 kg/m² at L=254. */
+  fetchDVL: function (site3) {
+    var self = this;
+    return this.latestKey(site3, "DVL").then(function (key) {
+      if (!key) return null;
+      return fetch(self.BUCKET + key)
+        .then(function (r) { return r.ok ? r.arrayBuffer() : null; })
+        .then(function (buf) {
+          if (!buf) return null;
+          var t = self.decodeReflectivity(new Uint8Array(buf));
+          if (!t || !t.radials.length || !t.hw || t.hw.length < 5) return null;
+          var scale = self._f16(t.hw[0]), off = self._f16(t.hw[1]);
+          var logStart = t.hw[2], logScale = self._f16(t.hw[3]), logOff = self._f16(t.hw[4]);
+          if (!scale || !logScale) return null;
+          var gateNm = 248.4 / t.nbins;                    // DVL range = 460 km ≈ 248.4 nm
+          var grid = {};
+          t.radials.forEach(function (rad) { grid[Math.round(rad.az) % 360] = rad.levels; });
+          function toVil(L) {
+            if (L < 2) return null;
+            return L < logStart ? (L - off) / scale : Math.exp((L - logOff) / logScale);
+          }
+          return {
+            /** max VIL (kg/m², rounded) in a small window around (az deg, range nm), or null */
+            sampleVil: function (az, ranNm) {
+              var gi = Math.round(ranNm / gateNm), best = null;
+              for (var da = -1; da <= 1; da++) {
+                var levs = grid[(((Math.round(az) + da) % 360) + 360) % 360];
+                if (!levs) continue;
+                for (var dg = -2; dg <= 2; dg++) {
+                  var g = gi + dg; if (g < 0 || g >= levs.length) continue;
+                  var v = toVil(levs[g]);
+                  if (v != null && (best == null || v > best)) best = v;
+                }
+              }
+              return best != null && best >= 0.5 ? Math.round(best) : null;
+            }
+          };
+        });
+    }).catch(function () { return null; });
+  },
+
   decodeReflectivity: function (data) {
     if (typeof window.bzip2 === "undefined") return null;
     var body = this._inflate(data);                 // N?B: MHB/PDB uncompressed
@@ -159,8 +213,12 @@ window.Level3 = {
       radials.push({ az: az, levels: sym.subarray(rp + 6, rp + 6 + nbytes) });
       rp += 6 + nbytes;
     }
+    // PDB threshold halfwords 31-35 (bytes mhb+60..68): digital products (DVL) keep
+    // their value-transform constants here; harmless extras for everything else.
+    var hw = [];
+    for (var hwi = 0; hwi < 5; hwi++) hw.push(dv.getInt16(mhb + 60 + hwi * 2));
     return { elevation: elevation, gateKm: 0.25, nbins: nbins, radials: radials,
-             radarLat: radarLat, radarLon: radarLon };
+             radarLat: radarLat, radarLon: radarLon, hw: hw };
   },
 
   _find3: function (b, from, a, c, d) {

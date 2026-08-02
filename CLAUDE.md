@@ -152,6 +152,43 @@ toolset** (`#srvtool`) to slide through the tilts, toggle the product, and close
   zoomed out, they thin. Below z5 Level III still isn't fetched. (Verified z8 unchanged; the automated pane
   went zoom-frozen so z5–6 sparse wasn't visually re-confirmed, but the path is a simple threshold gate.)
 
+## Auto-refresh + DVL VIL + optional enhancement server (2026-08-02)
+- **Auto-refresh (live mode)**: `c-autorefresh` toggle (default ON, persisted) — every 120 s the
+  site cache-busts the current still (`refreshStill`: IEM `setUrl ?_=`, WMS `setParams`, GIBS
+  re-add, QPE `_crBust`+redraw, MRMS re-point) and re-runs `loadWarnings` (+ METAR when on); the
+  per-source caches (60–180 s) keep network cost small. Held while PLAY is animating or
+  `document.hidden`; returning after an absence refreshes within 2 s. Masthead shows an
+  `#autonext` "upd :SS" countdown.
+- **VIL column filled (keyless)**: `Level3.fetchDVL` decodes Digital VIL (product 134) through the
+  same bzip2 packet-16 path as EET; the transform constants live in **PDB threshold halfwords
+  31-35 as NEXRAD custom float16** (`_f16`: sign/5-bit exp bias-16/10-bit mantissa): below
+  `logStart` VIL=(L−off)/scale, above VIL=e^((L−logOff)/logScale) (live: 90.6875/2/20/38.875/83.875,
+  ~79 kg/m² at L=254). `decodeReflectivity` now returns `hw[0..4]`. Wired beside EET in
+  `loadStormData` (dvlCache 3-min) → new **VIL (kg/m²)** storm-table column. Verified live at KBUF:
+  52/52 rows with Top AND VIL (4–18 kg/m²).
+- **png32 fix**: the QPE `PrecipTileLayer` now requests `format=png32` — plain `png` returns PNG24
+  with NO alpha, painting no-data black (bug surfaced by the Android port).
+- **Chime on new warning** (`c-chime`, default OFF): two-tone WebAudio chime when a never-seen
+  warning id appears IN VIEW (seen-set is national, so panning into old warnings stays silent).
+- **Optional enhancement server** (`C:\Claude\ClassicRadarServer`, own CLAUDE.md): probed at boot
+  (`srvInit` — saved `classicRadar.server.v1` URL first, then **same-origin**, so the server
+  hosting the site itself needs zero config). When up: green `#srvbadge` ENHANCED, and
+  - alerts come from `/api/alerts?bbox` (server-slimmed, ~95% smaller; same NWS shape; 60-s
+    client cache keyed by rounded padded bbox),
+  - METAR comes from `/api/awc/metar` (aviationweather.gov via proxy; °C→°F adapter) with IEM fallback,
+  - product menu gains **Severe weather (server)**: MRMS MESH / VIL grid / rotation tracks
+    (`showMrms` tile layer + `#precipkey` legend from `/api/mrms`),
+  - Animation gains **3 h / 6 h / 24 h archive loops** (`loadServerLoop` → `/api/frames` +
+    `/tiles/n0q/<ts>/{z}/{x}/{y}.png`, native z12 — crisper than RainViewer's z7).
+  Every path falls back keyless on failure (`srvFail` after 2 errors → badge off, selects bounce
+  back; 5-min re-probe recovers). Verified live BOTH ways: enhanced (52-cell field, MESH tiles,
+  49-frame 24-h scrub of 16-h-old frames, 27 AWC METARs) and killed-server (keyless everything,
+  VIL still filled — DVL is client-side). GOTCHA fixed: concurrent loop loads race — `loopReq`
+  stale-guard so a slow RainViewer response can't clobber a newer server loop.
+- **Browser-pane quirk** (verification, not app): the automated pane's map can boot with
+  collapsed bounds (bbox = center point) — dispatch a window `resize` (app already listens →
+  `invalidateSize`) before trusting in-view counts.
+
 ## Verbose weather-alerts table (map-linked)
 Third storm-panel tab **"Alerts (N)"** (beside Storm Attribute Table / Level III Text): every active NWS
 alert — all event types (warnings, watches, advisories, statements) — whose polygon intersects the view,

@@ -519,3 +519,15 @@ table.storm tbody tr.mk-hi { background: #cfe0ff !important; }
   table.storm th, table.storm td { padding: 5px 7px; }       /* taller rows to tap */
   #tablebar { padding: 4px 8px; }
 }
+
+/* ===== enhancement-server badge + auto-refresh countdown (masthead) ===== */
+#srvbadge {
+  color: #46d46a; font: bold 10px/1 "Courier New", monospace; letter-spacing: 0.5px;
+  border: 1px solid #2c7a41; padding: 2px 6px; margin-right: 8px; white-space: nowrap;
+}
+#autonext {
+  color: #b9c6d6; font: 10px/1 "Courier New", monospace; margin-right: 8px; white-space: nowrap;
+}
+
+/* MRMS severe-grid color key chips (rendered into #precipkey) */
+#precipkey .pk-box { width: 11px; height: 11px; display: block; }

@@ -149,7 +149,9 @@ var PrecipTileLayer = L.TileLayer.extend({
     var maxy =  WEBMERC_MAX - coords.y * 256 * res, miny = maxy - 256 * res;
     var rule = encodeURIComponent(JSON.stringify({ rasterFunction: this.options.rasterFunction }));
     return MRMS_EXPORT + "?bbox=" + minx + "," + miny + "," + maxx + "," + maxy +
-      "&bboxSR=3857&imageSR=3857&size=256,256&format=png&transparent=true&f=image&renderingRule=" + rule +
+      // png32, NOT png: plain png comes back as PNG24 with no alpha channel, so every
+      // no-data pixel would paint solid black over the basemap (found via the Android port)
+      "&bboxSR=3857&imageSR=3857&size=256,256&format=png32&transparent=true&f=image&renderingRule=" + rule +
       (this._crBust ? "&_=" + this._crBust : "");
   }
 });
@@ -181,6 +183,104 @@ function showPrecipKey(rule) {
     el.innerHTML = '<div class="pk-title">Precip (in)</div><div class="pk-ramp">' + ramp +
       '</div><div class="pk-scale">' + ticks + '</div>';
   }).catch(function () { el.innerHTML = '<div class="pk-title">Precip (in)</div>'; });
+}
+
+/* ===== optional enhancement server (ClassicRadarServer) =====
+   Fully optional: the site probes /health at boot (saved URL first, then same-origin — the
+   server can host this site itself). When up, data paths PREFER the server (slimmed alerts,
+   AWC METAR, MRMS severe grids, 24-h loop) and every one falls back to the keyless source
+   on any failure, so a dead/unreachable server just means the site behaves as before. */
+var SRV = { url: "", up: false, mrms: [], fails: 0 };
+var SRV_KEY = "classicRadar.server.v1";
+function srvSavedUrl() { try { return localStorage.getItem(SRV_KEY) || ""; } catch (e) { return ""; } }
+function srvSaveUrl(u) { try { localStorage.setItem(SRV_KEY, u); } catch (e) {} }
+function srvProbe(url, cb) {
+  var done = false;
+  var t = setTimeout(function () { if (!done) { done = true; cb(null); } }, 2500);
+  fetch(url + "/health").then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) { if (!done) { done = true; clearTimeout(t); cb(j && j.ok ? j : null); } })
+    .catch(function () { if (!done) { done = true; clearTimeout(t); cb(null); } });
+}
+function srvSetState(url, health) {
+  SRV.url = url; SRV.up = !!health; SRV.fails = 0;
+  SRV.mrms = (health && health.caps && health.caps.mrms) || [];
+  var badge = document.getElementById("srvbadge");
+  if (badge) badge.style.display = SRV.up ? "" : "none";
+  var og = document.getElementById("srv-products");
+  if (og) og.style.display = SRV.up && SRV.mrms.length ? "" : "none";
+  [].forEach.call(document.querySelectorAll("#srv-products option"), function (o) { o.disabled = !SRV.up; });
+  var fg = document.getElementById("srv-frames");
+  if (fg) fg.style.display = SRV.up ? "" : "none";
+  [].forEach.call(document.querySelectorAll("#srv-frames option"), function (o) { o.disabled = !SRV.up; });
+  var st = document.getElementById("server-status");
+  if (st) st.textContent = SRV.up ? "Enhanced server connected: " + url
+    : (url ? "Server unreachable — running keyless." : "No server configured — running keyless.");
+  if (!SRV.up) {
+    // if a server-only selection is active, drop back to the keyless equivalents
+    var prod = document.getElementById("product");
+    if (optSrc(prod) === "mrms") { prod.value = "N0B"; applyProduct(); }
+    var fr = document.getElementById("frames");
+    if (fr.value.charAt(0) === "s") { fr.value = "24"; }
+  }
+}
+function srvFail() {
+  if (!SRV.up) return;
+  if (++SRV.fails >= 2) { srvSetState(SRV.url, null); }       // degrade; re-probe timer may recover it
+}
+function srvInit() {
+  var cands = [];
+  var saved = srvSavedUrl();
+  if (saved) cands.push(saved.replace(/\/+$/, ""));
+  if (/^https?:/.test(location.protocol)) cands.push(location.origin);   // server hosting this site
+  (function next(i) {
+    if (i >= cands.length) { srvSetState(saved, null); return; }
+    srvProbe(cands[i], function (h) { if (h) srvSetState(cands[i], h); else next(i + 1); });
+  })(0);
+}
+setInterval(function () {          // recover a configured server that comes back (or boots later)
+  if (SRV.up) { srvProbe(SRV.url, function (h) { if (!h) srvFail(); else { SRV.fails = 0; SRV.mrms = (h.caps && h.caps.mrms) || SRV.mrms; } }); return; }
+  var saved = srvSavedUrl();
+  var cand = saved ? saved.replace(/\/+$/, "") : (/^https?:/.test(location.protocol) ? location.origin : "");
+  if (cand) srvProbe(cand, function (h) { if (h) srvSetState(cand, h); });
+}, 300000);
+
+/* ---- MRMS severe-weather grids (server-only product) ---- */
+var mrmsLayer = null;
+function clearMrms() { if (mrmsLayer) { map.removeLayer(mrmsLayer); mrmsLayer = null; } clearPrecipKey(); }
+function mrmsMeta(id) {
+  for (var i = 0; i < SRV.mrms.length; i++) if (SRV.mrms[i].id === id) return SRV.mrms[i];
+  return null;
+}
+function showMrms(id) {
+  clearMrms();
+  if (!SRV.up) return;
+  var meta = mrmsMeta(id);
+  mrmsLayer = attachRetry(L.tileLayer(SRV.url + "/tiles/mrms/" + id + "/{z}/{x}/{y}.png?v=" +
+    encodeURIComponent((meta && meta.valid) || ""), { pane:"radar", opacity:radarOpacity(),
+    maxZoom:18, maxNativeZoom:9, noWrap:true, attribution:"MRMS &copy; NOAA/NSSL via enhancement server" }),
+    "MRMS " + id).addTo(map);
+  showMrmsKey(meta);
+  document.getElementById("stamp").textContent = meta && meta.valid ? "MRMS " + meta.valid.slice(11, 16) + "Z" : "MRMS";
+}
+function showMrmsKey(meta) {
+  var el = document.getElementById("precipkey");
+  if (!el || !meta || !meta.legend) return;
+  var ramp = meta.legend.map(function (e) {
+    return '<span class="pk-box" title="' + esc(e.v) + '" style="background:' + esc(e.c) + '"></span>';
+  }).join("");
+  var l = meta.legend, idx = [0, Math.floor(l.length / 2), l.length - 1];
+  var ticks = idx.map(function (i) { return "<span>" + esc(l[i].v) + "</span>"; }).join("");
+  el.innerHTML = '<div class="pk-title">' + esc(meta.units) + '</div><div class="pk-ramp">' + ramp +
+    '</div><div class="pk-scale">' + ticks + "</div>";
+  el.style.display = "block";
+}
+/* refresh the MRMS product list (valid times move every ~2 min) then re-point the layer */
+function refreshMrms(id) {
+  if (!SRV.up) return;
+  fetch(SRV.url + "/api/mrms").then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+    if (j && j.products) SRV.mrms = j.products;
+    if (currentProductSrc() === "mrms") showMrms(id);
+  }).catch(function () { srvFail(); });
 }
 
 function clearFrames() {
@@ -395,12 +495,33 @@ function currentScheme() {
   var s = opt.options[opt.selectedIndex].getAttribute("data-scheme");
   return s || "6";
 }
+/* TWO layers, double-buffered: the next frame preloads on the hidden buffer, then we
+   swap by opacity -> instant, no clearing/strobe. Only ~2 frames load at once. */
+function makeBuffers(maxNative, attribution, label) {
+  if (!frameUrls.length) return;
+  var lastUrl = frameUrls[frameUrls.length - 1];
+  for (var bi = 0; bi < 2; bi++) {
+    var lyr = attachRetry(L.tileLayer(lastUrl, { pane:"radar", opacity:0, maxZoom:18,
+      maxNativeZoom:maxNative, noWrap:true, attribution:attribution }), label).addTo(map);
+    lyr._crFrame = frameUrls.length - 1;
+    buffers.push(lyr);
+  }
+}
+
+var loopReq = 0;   // stale-load guard: only the NEWEST loop request may install frames
 function loadRainViewer() {
-  var n = parseInt(document.getElementById("frames").value, 10);
+  var fsel = document.getElementById("frames").value;
+  if (fsel.charAt(0) === "s") {
+    if (SRV.up) return loadServerLoop(fsel);
+    document.getElementById("frames").value = "24";          // server gone -> RainViewer fallback
+  }
+  var req = ++loopReq;
+  var n = parseInt(fsel, 10);
   var scheme = currentScheme();
   return fetch("https://api.rainviewer.com/public/weather-maps.json")
     .then(function (r) { return r.json(); })
     .then(function (j) {
+      if (req !== loopReq) return false;   // a newer loop load superseded this one
       clearFrames();
       var past = (j.radar && j.radar.past) || [];
       var use = past.slice(Math.max(0, past.length - n));
@@ -408,22 +529,42 @@ function loadRainViewer() {
         frameUrls.push(j.host + f.path + "/256/{z}/{x}/{y}/" + scheme + "/1_1.png");
         frameTimes.push(f.time);
       });
-      if (frameUrls.length) {
-        // TWO layers, double-buffered: the next frame preloads on the hidden buffer, then we
-        // swap by opacity -> instant, no clearing/strobe. Only ~2 frames load at once (vs 12),
-        // so RainViewer isn't rate-limited into dropped tiles. Native z7 -> clamp + upscale.
-        var lastUrl = frameUrls[frameUrls.length - 1];
-        for (var bi = 0; bi < 2; bi++) {
-          var lyr = attachRetry(L.tileLayer(lastUrl, { pane:"radar", opacity:0, maxZoom:18,
-            maxNativeZoom:7, noWrap:true, attribution:"Radar &copy; RainViewer" }), "RainViewer loop").addTo(map);
-          lyr._crFrame = frameUrls.length - 1;
-          buffers.push(lyr);
-        }
-      }
+      // RainViewer's mosaic is native z7 -> clamp + upscale
+      makeBuffers(7, "Radar &copy; RainViewer", "RainViewer loop");
       curFrame = frameUrls.length - 1;
       wireScrub();
       goLive();                    // default to the reliable IEM current scan; PLAY switches to the loop
       return true;
+    });
+}
+
+/* Long loops from the enhancement server's rolling 24-h IEM-archive tile store.
+   Frames are real 5-min USCOMP N0Q scans (native z12 — far crisper than RainViewer). */
+function tsToUnix(ts) {   // "YYYYMMDDHHMM" (UTC) -> unix seconds
+  return Date.UTC(+ts.slice(0, 4), +ts.slice(4, 6) - 1, +ts.slice(6, 8), +ts.slice(8, 10), +ts.slice(10, 12)) / 1000;
+}
+function loadServerLoop(spec) {
+  var req = ++loopReq;
+  var conf = { s3h: { h: 3, step: 5 }, s6h: { h: 6, step: 10 }, s24h: { h: 24, step: 30 } }[spec] || { h: 3, step: 5 };
+  return fetch(SRV.url + "/api/frames?hours=" + conf.h + "&step=" + conf.step)
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function (j) {
+      if (req !== loopReq) return false;   // a newer loop load superseded this one
+      clearFrames();
+      (j.frames || []).forEach(function (ts) {
+        frameUrls.push(SRV.url + "/tiles/n0q/" + ts + "/{z}/{x}/{y}.png");
+        frameTimes.push(tsToUnix(ts));
+      });
+      makeBuffers(12, "Radar archive &copy; IEM via enhancement server", "Server loop");
+      curFrame = frameUrls.length - 1;
+      wireScrub();
+      goLive();
+      return true;
+    })
+    .catch(function () {
+      srvFail();
+      document.getElementById("frames").value = "24";
+      return loadRainViewer();
     });
 }
 
@@ -498,7 +639,7 @@ function applyProduct() {
   var note = document.getElementById("prodnote");
   pause();
   if (srvActive) closeSingleRadar(false);                // changing product drops the single-radar overlay
-  clearPrecip(); clearPrecipKey();                       // and any MRMS precip layer + its key
+  clearPrecip(); clearPrecipKey(); clearMrms();          // and any MRMS precip/severe layer + key
   document.getElementById("legend").style.display = (src === "rv") ? "" : "none";  // dBZ scale is refl-only
 
   if (src === "rv") {
@@ -523,6 +664,19 @@ function applyProduct() {
     note.textContent = opt.text.replace(/&deg;/g,"°") +
       " — NOAA/NWS MRMS gauge-corrected QPE (inches). National mosaic, updates ~hourly.";
     document.getElementById("stamp").textContent = "MRMS QPE";
+  } else if (src === "mrms") {
+    clearFrames(); clearSat();
+    setPlaybar(false);
+    var mid = opt.getAttribute("data-mrms");
+    if (SRV.up) {
+      refreshMrms(mid);            // re-reads valid times, then draws the layer
+      showMrms(mid);
+      note.textContent = opt.text + " — MRMS national grid decoded by your enhancement server " +
+        "from NOAA's open-data bucket (updates ~2 min).";
+    } else {
+      note.textContent = "Requires the enhancement server (not connected).";
+      document.getElementById("stamp").textContent = "server n/a";
+    }
   } else if (src === "d3") {
     // volumetric launcher: reset the map product to reflectivity, open the 3D view
     clearSat();
@@ -784,14 +938,20 @@ function loadStormData() {
   }));
   return Promise.all([warnP, l3P]).then(function (res) {
     var l3List = res[1].filter(function (x) { return x.result; });
-    // fetch Enhanced Echo Tops only for the radars that actually returned cells (cached)
+    // fetch Enhanced Echo Tops + Digital VIL only for radars that actually returned cells (cached)
     var eetSites = l3List.filter(function (e) { return e.result.cells && e.result.cells.length; });
     return Promise.all(eetSites.map(function (e) {
-      return fetchEETCached(Level3.site3(e.site.id)).then(function (s) { return { id: e.site.id, sampler: s }; });
-    })).then(function (eets) {
-      var eetBySite = {};
-      eets.forEach(function (e) { if (e.sampler) eetBySite[e.id] = e.sampler; });
-      renderStorm(res[0], l3List, eetBySite);
+      var s3 = Level3.site3(e.site.id);
+      return Promise.all([fetchEETCached(s3), fetchDVLCached(s3)]).then(function (ss) {
+        return { id: e.site.id, eet: ss[0], dvl: ss[1] };
+      });
+    })).then(function (samplers) {
+      var eetBySite = {}, dvlBySite = {};
+      samplers.forEach(function (e) {
+        if (e.eet) eetBySite[e.id] = e.eet;
+        if (e.dvl) dvlBySite[e.id] = e.dvl;
+      });
+      renderStorm(res[0], l3List, eetBySite, dvlBySite);
     });
   });
 }
@@ -800,6 +960,13 @@ function fetchEETCached(site3) {
   var e = eetCache[site3];
   if (e && Date.now() - e.t < 180000) return Promise.resolve(e.sampler);
   return Level3.fetchEET(site3).then(function (s) { eetCache[site3] = { t: Date.now(), sampler: s }; return s; })
+    .catch(function () { return null; });
+}
+var dvlCache = {};   // site3 -> { t, sampler } (3-min TTL) — Digital VIL, product 134
+function fetchDVLCached(site3) {
+  var e = dvlCache[site3];
+  if (e && Date.now() - e.t < 180000) return Promise.resolve(e.sampler);
+  return Level3.fetchDVL(site3).then(function (s) { dvlCache[site3] = { t: Date.now(), sampler: s }; return s; })
     .catch(function () { return null; });
 }
 var loadWarnings = loadStormData;   // back-compat alias
@@ -827,8 +994,9 @@ function drawTopCallouts(rows) {
   });
 }
 
-function renderStorm(features, l3List, eetBySite) {
+function renderStorm(features, l3List, eetBySite, dvlBySite) {
   eetBySite = eetBySite || {};
+  dvlBySite = dvlBySite || {};
   warnLayer.clearLayers();
   trackLayer.clearLayers();
   topsLayer.clearLayers();
@@ -837,6 +1005,7 @@ function renderStorm(features, l3List, eetBySite) {
   lastL3 = l3List[0] ? l3List[0].result : null;
 
   var bounds = map.getBounds().pad(0.15);
+  chimeCheck(features, bounds);          // optional chime on a never-seen in-view warning
   var z = map.getZoom();
   var showTracks = z >= TRACK_MIN_ZOOM && document.getElementById("c-tracks").checked;
   // thin tracks progressively as you zoom out so they don't overlap into mush:
@@ -852,15 +1021,17 @@ function renderStorm(features, l3List, eetBySite) {
     var res = entry.result;
     if (!res || !res.cells) return;
     var eet = eetBySite[entry.site.id];
+    var dvl = dvlBySite[entry.site.id];
     res.cells.forEach(function (c) {
       if (c.lat < bounds.getSouth() || c.lat > bounds.getNorth() ||
           c.lon < bounds.getWest() || c.lon > bounds.getEast()) return;
       var top = (eet && c.az != null && c.ran != null) ? eet.sampleTop(c.az, c.ran) : null;
+      var vil = (dvl && c.az != null && c.ran != null) ? dvl.sampleVil(c.az, c.ran) : null;
       rows.push({
         key: c.id + "#" + si, id: c.id, site: entry.site.id,
         glyph: "●", cls: "t-cell", threat: "cell", event: "Radar cell · " + entry.site.id,
         hail: null, wind: null, dir: (c.headingToward != null ? compass(c.headingToward) : "—"),
-        spd: c.speedKt >= 0 ? c.speedKt : null, top: top,
+        spd: c.speedKt >= 0 ? c.speedKt : null, top: top, vil: vil,
         area: "", expires: null, center: [c.lat, c.lon], track: c.forecast, tvs: false
       });
     });
@@ -980,7 +1151,7 @@ function buildTable(rows) {
     return;
   }
   var h = '<table class="storm"><thead><tr>' +
-    '<th>ID</th><th>Threat</th><th>Event</th><th>Top (kft)</th><th>Max Hail (in)</th>' +
+    '<th>ID</th><th>Threat</th><th>Event</th><th>Top (kft)</th><th>VIL (kg/m²)</th><th>Max Hail (in)</th>' +
     '<th>Max Wind (kt)</th><th>Dir</th><th>Spd (kt)</th><th>Area</th><th>Expires</th>' +
     '</tr></thead><tbody>';
   rows.forEach(function (r) {
@@ -990,6 +1161,7 @@ function buildTable(rows) {
       '<td class="ev"><span class="threat ' + r.cls + '">' + r.glyph + "</span> " + r.threat.toUpperCase() + '</td>' +
       '<td class="ev">' + r.event + '</td>' +
       '<td>' + (r.top != null ? r.top : "—") + '</td>' +
+      '<td>' + (r.vil != null ? r.vil : "—") + '</td>' +
       '<td>' + (r.hail != null ? r.hail.toFixed(2) : "—") + '</td>' +
       '<td>' + (r.wind != null ? r.wind : "—") + '</td>' +
       '<td class="dir">' + r.dir + '</td>' +
@@ -1165,6 +1337,7 @@ document.getElementById("opacity").addEventListener("input", function () {
   if (usingFrames && buffers.length) buffers[frontBuf].setOpacity(radarOpacity());
   if (srvOverlay) srvOverlay.setOpacity(radarOpacity());
   if (precipLayer) precipLayer.setOpacity(radarOpacity());
+  if (mrmsLayer) mrmsLayer.setOpacity(radarOpacity());
 });
 
 function toggleLayer(cb, layer) {
@@ -1215,14 +1388,29 @@ function esc(s){ return (s == null ? "" : String(s)).replace(/[&<>"]/g, function
   return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]; }); }
 function fmtLocal(d){ try { return d.toLocaleString([], { month:"short", day:"numeric", hour:"numeric", minute:"2-digit", timeZoneName:"short" }); } catch(e){ return ""; } }
 
-function fetchAllAlertsCached() {
+function fetchAllAlertsNational() {
   // active alerts change slowly; cache the ~2 MB national list 3 min so panning re-filters
   // from memory instead of refetching (re-filtering the parsed features per pan is cheap).
-  if (alertsCache && Date.now() - alertsCache.t < 180000) return Promise.resolve(alertsCache.features);
+  if (alertsCache && !alertsCache.key && Date.now() - alertsCache.t < 180000) return Promise.resolve(alertsCache.features);
   return fetch(ALERTS_URL, { headers:{ "Accept":"application/geo+json" } })
     .then(function (r) { return r.ok ? r.json() : { features: [] }; })
     .then(function (j) { var f = j.features || []; alertsCache = { t: Date.now(), features: f }; return f; })
     .catch(function () { return (alertsCache && alertsCache.features) || []; });
+}
+function fetchAllAlertsCached() {
+  if (!SRV.up) return fetchAllAlertsNational();
+  // enhanced: the server holds the national feed and returns a bbox-filtered, slimmed
+  // FeatureCollection (same NWS shape, ~95% smaller). Key the client cache by a rounded,
+  // padded box so a small pan re-filters locally and a big one refetches.
+  var b = map.getBounds().pad(0.6);
+  var key = Math.floor(b.getSouth()) + "," + Math.floor(b.getWest()) + "," +
+            Math.ceil(b.getNorth()) + "," + Math.ceil(b.getEast());
+  if (alertsCache && alertsCache.key === key && Date.now() - alertsCache.t < 60000)
+    return Promise.resolve(alertsCache.features);
+  return fetch(SRV.url + "/api/alerts?bbox=" + key)
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function (j) { var f = j.features || []; alertsCache = { t: Date.now(), features: f, key: key }; return f; })
+    .catch(function () { srvFail(); alertsCache = null; return fetchAllAlertsNational(); });
 }
 
 function loadAlerts() {
@@ -1514,23 +1702,54 @@ function statesInView(b) {
   }
   return out.slice(0, 6);   // cap the number of network fetches
 }
+/* IEM per-state ASOS currents -> plain obs objects (the keyless path). */
+function metarFromIem(b) {
+  var states = statesInView(b);
+  return Promise.all(states.map(function (st) {
+    return fetchGeo("https://mesonet.agron.iastate.edu/api/1/currents.geojson?network=" + st + "_ASOS", 300000);
+  })).then(function (results) {
+    var feats = [];
+    results.forEach(function (j) { if (j && j.features) feats = feats.concat(j.features); });
+    return feats.map(function (f) { return f.properties; });
+  });
+}
+/* aviationweather.gov via the enhancement server (CORS-blocked directly) -> same obs shape.
+   AWC reports °C and true aviation METARs; adapt to the IEM-ish fields the renderer uses. */
+function metarFromAwc(b) {
+  var bbox = b.getSouth().toFixed(1) + "," + b.getWest().toFixed(1) + "," +
+             b.getNorth().toFixed(1) + "," + b.getEast().toFixed(1);
+  return fetch(SRV.url + "/api/awc/metar?bbox=" + bbox)
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function (list) {
+      return (list || []).map(function (o) {
+        return {
+          station: o.icaoId, name: o.name || "", lat: o.lat, lon: o.lon,
+          tmpf: o.temp != null ? Math.round(o.temp * 9 / 5 + 32) : null,
+          dwpf: o.dewp != null ? Math.round(o.dewp * 9 / 5 + 32) : null,
+          drct: typeof o.wdir === "number" ? o.wdir : null,
+          sknt: typeof o.wspd === "number" ? o.wspd : null,
+          gust: typeof o.wgst === "number" ? o.wgst : null,
+          wxcodes: o.wxString || "", raw: o.rawOb || ""
+        };
+      });
+    });
+}
 function loadMetar() {
   metarLayer.clearLayers();
   if (!document.getElementById("c-metar").checked) return;
-  var b = map.getBounds(), states = statesInView(b);
-  Promise.all(states.map(function (st) {
-    return fetchGeo("https://mesonet.agron.iastate.edu/api/1/currents.geojson?network=" + st + "_ASOS", 300000);
-  })).then(function (results) {
+  var b = map.getBounds();
+  var obsP = SRV.up
+    ? metarFromAwc(b).catch(function () { srvFail(); return metarFromIem(b); })
+    : metarFromIem(b);
+  obsP.then(function (obs) {
     if (!document.getElementById("c-metar").checked) return;
-    var feats = [];
-    results.forEach(function (j) { if (j && j.features) feats = feats.concat(j.features); });
-    feats = feats.filter(function (f) {
-      var p = f.properties; if (!p || p.tmpf == null || p.lat == null) return false;
+    obs = obs.filter(function (p) {
+      if (!p || p.tmpf == null || p.lat == null) return false;
       return p.lat >= b.getSouth() && p.lat <= b.getNorth() && p.lon >= b.getWest() && p.lon <= b.getEast();
     });
     var placed = [];
-    feats.forEach(function (f) {
-      var p = f.properties, pt = map.latLngToContainerPoint([p.lat, p.lon]);
+    obs.forEach(function (p) {
+      var pt = map.latLngToContainerPoint([p.lat, p.lon]);
       var box = { x1: pt.x - 20, y1: pt.y - 14, x2: pt.x + 20, y2: pt.y + 14 };
       for (var i = 0; i < placed.length; i++) {
         var q = placed[i];
@@ -1641,11 +1860,91 @@ window.addEventListener("beforeunload", function () {
 document.getElementById("refresh").addEventListener("click", function () {
   var src = document.getElementById("product").options[document.getElementById("product").selectedIndex].getAttribute("data-src");
   if (src === "rv") loadRainViewer();
-  else if (src === "precip") applyProduct();          // re-request the MRMS layer
-  eetCache = {}; alertsCache = null; geoCache = {};    // force-refresh cached Level III + alerts + vectors
+  else if (src === "precip" || src === "mrms") applyProduct();   // re-request the layer
+  eetCache = {}; dvlCache = {}; alertsCache = null; geoCache = {};  // force-refresh Level III + alerts + vectors
   loadWarnings();
   loadOutlook(); loadWatches(); loadMetar();          // no-ops when their toggles are off
 });
+
+/* ===================== AUTO-REFRESH (live mode) =====================
+   A radar page that only updates when poked goes silently stale. Every AUTO_MS the site
+   re-pulls the current still (cache-busted), warnings/cells/alerts and — when on — METAR;
+   the per-source caches (60-180 s) keep the actual network cost small. Held while the
+   animation is playing or the tab is hidden; coming back after a long absence refreshes
+   immediately. The masthead shows a classic "upd :SS" countdown. */
+var AUTO_SECS = 120;
+var autoLeft = AUTO_SECS;
+function refreshStill() {
+  var src = currentProductSrc();
+  var sel = document.getElementById("product");
+  var opt = sel.options[sel.selectedIndex];
+  if (src === "rv") {
+    if (usingFrames) return;                        // animating: frames are already historical
+    if (compLayer) compLayer.setParams({ _t: Date.now() });
+    if (iemLayer) iemLayer.setUrl(IEM_URL + "?_=" + Date.now());
+  } else if (src === "sat") {
+    showSat(opt.getAttribute("data-sat"));          // GIBS "default" time -> latest scan
+  } else if (src === "precip") {
+    if (precipLayer) { precipLayer._crBust = Date.now(); precipLayer.redraw(); }
+  } else if (src === "mrms") {
+    refreshMrms(opt.getAttribute("data-mrms"));
+  }
+}
+function autoRefresh() {
+  refreshStill();
+  loadWarnings();                                   // NST/EET/DVL/alert caches gate refetches
+  if (document.getElementById("c-metar").checked) loadMetar();
+}
+setInterval(function () {
+  var el = document.getElementById("autonext");
+  var cb = document.getElementById("c-autorefresh");
+  if (!cb || !cb.checked) { if (el) el.textContent = ""; autoLeft = AUTO_SECS; return; }
+  if (playing || document.hidden) { if (el) el.textContent = ""; return; }   // hold, don't count down
+  if (--autoLeft <= 0) { autoLeft = AUTO_SECS; autoRefresh(); }
+  if (el) el.textContent = "upd :" + pad(autoLeft > 99 ? 99 : autoLeft);
+}, 1000);
+document.addEventListener("visibilitychange", function () {
+  if (!document.hidden && document.getElementById("c-autorefresh").checked) autoLeft = Math.min(autoLeft, 2);
+});
+
+/* ===================== NEW-WARNING CHIME =====================
+   Optional two-tone chime when a warning id we have never seen appears IN VIEW (seen-set is
+   national, so panning into existing warnings stays silent). Enabling the box is the user
+   gesture that lets the AudioContext start. */
+var seenWarnIds = null;
+function chimeCheck(features, bounds) {
+  var ids = {}, freshInView = false;
+  features.forEach(function (f) {
+    var id = f.id || (f.properties && f.properties.id) || "";
+    if (!id) return;
+    ids[id] = 1;
+    if (seenWarnIds && !(id in seenWarnIds)) {
+      var bb = geomBBox(f.geometry);
+      if (bb && bounds.intersects(bb)) freshInView = true;
+    }
+  });
+  var cb = document.getElementById("c-chime");
+  if (freshInView && cb && cb.checked) chime();
+  seenWarnIds = ids;
+}
+function chime() {
+  try {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    var ac = chime._ac || (chime._ac = new AC());
+    if (ac.state === "suspended") ac.resume();
+    [880, 660].forEach(function (fq, i) {
+      var o = ac.createOscillator(), g = ac.createGain();
+      o.frequency.value = fq; o.type = "sine";
+      var t0 = ac.currentTime + i * 0.28;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.22, t0 + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.26);
+      o.connect(g); g.connect(ac.destination);
+      o.start(t0); o.stop(t0 + 0.3);
+    });
+  } catch (e) {}
+}
 
 var moveTimer = null;
 map.on("moveend", function () {
@@ -1662,7 +1961,8 @@ map.on("popupclose", function () { alertHoverLayer.clearLayers(); });   // drop 
    not sent to any server, no size limit, and this is a static site. */
 var PREFS_KEY = "classicRadar.prefs.v1";
 var PREF_CHECKS = ["c-base","c-county","c-hwy","c-city","c-warn","c-alerts","c-cells","c-tracks",
-                   "c-tops","c-watches","c-outlook","c-metar","c-sites","c-iem"];
+                   "c-tops","c-watches","c-outlook","c-metar","c-sites","c-iem",
+                   "c-autorefresh","c-chime"];
 var PREF_SELECTS = ["product","frames","speed","dwell","network"];
 var restoredView = false;
 
@@ -1686,9 +1986,12 @@ function restorePrefs() {
     var v = p.selects[id], e = document.getElementById(id);
     if (e && v != null && [].some.call(e.options, function (o) { return o.value === v; })) e.value = v;
   });
-  // don't auto-open the 3D volumetric view on load — fall back to base reflectivity
+  // don't auto-open the 3D volumetric view on load — fall back to base reflectivity;
+  // same for server-only selections (the server probe hasn't finished at boot)
   var prod = document.getElementById("product");
-  if (optSrc(prod) === "d3") prod.value = "N0B";
+  if (optSrc(prod) === "d3" || optSrc(prod) === "mrms") prod.value = "N0B";
+  var fr = document.getElementById("frames");
+  if (fr.value.charAt(0) === "s") fr.value = "24";
   if (p.checks) PREF_CHECKS.forEach(function (id) { var e = document.getElementById(id); if (e && id in p.checks) e.checked = p.checks[id]; });
   if (p.opacity != null) { var o = document.getElementById("opacity"); if (o) o.value = p.opacity; }
   if (p.view && isFinite(p.view.lat) && isFinite(p.view.lon)) {
@@ -1707,11 +2010,31 @@ function wirePrefSaving() {
   map.on("moveend", savePrefs);
 }
 
+/* ---- enhancement-server settings UI ---- */
+(function wireServerUi() {
+  var inp = document.getElementById("server-url");
+  var btn = document.getElementById("server-apply");
+  if (!inp || !btn) return;
+  inp.value = srvSavedUrl();
+  btn.addEventListener("click", function () {
+    var u = inp.value.replace(/\s+/g, "").replace(/\/+$/, "");
+    srvSaveUrl(u);
+    var st = document.getElementById("server-status");
+    if (st) st.textContent = u ? "Probing " + u + "…" : "Server cleared — running keyless.";
+    if (!u) { srvSetState("", null); return; }
+    srvProbe(u, function (h) {
+      srvSetState(u, h);
+      if (h) { alertsCache = null; loadWarnings(); }     // switch data paths over right away
+    });
+  });
+})();
+
 /* ============================= BOOT ============================= */
 buildLegend();
 startClock();
 setStatus("Loading radar sites…");
 restorePrefs();     // apply saved control values + map view before anything reads them
+srvInit();          // probe the optional enhancement server (saved URL, then same-origin)
 loadStations().then(function () { buildSiteMarkers(); if (!restoredView) centerOnSite(); });
 applyProduct();     // reads the restored product (default: base reflectivity / IEM live)
 loadWarnings();
