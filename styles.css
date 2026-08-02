@@ -341,10 +341,14 @@ table.storm tbody tr:hover { background: #dbe7ff; cursor: pointer; }
 
 /* METAR surface-obs station plots */
 .metarwrap { pointer-events: auto; }
-.metar { position: absolute; left: -14px; top: -8px; display: flex; align-items: center; gap: 2px;
-  font: bold 10px "Courier New", monospace; white-space: nowrap; }
-.metar .mt { color: #ff5a5a; text-shadow: 0 0 2px #000, 0 0 2px #000; }
-.metar .mw { color: #cfe3ff; font-size: 13px; line-height: 1; display: inline-block; text-shadow: 0 0 2px #000; }
+/* solid dark chip (same family as cell marks / top callouts) so plots stay readable over
+   ANY radar color — the old red-on-transparent temp vanished inside 50+ dBZ cores */
+.metar { position: absolute; left: -16px; top: -9px; display: flex; align-items: center; gap: 3px;
+  font: bold 10px "Courier New", monospace; white-space: nowrap;
+  background: rgba(16,24,32,0.82); border: 1px solid rgba(255,255,255,0.45);
+  border-radius: 2px; padding: 1px 4px; }
+.metar .mt { color: #fff; }
+.metar .mw { color: #6fd6ff; font-size: 13px; line-height: 1; display: inline-block; }
 
 /* my-location marker */
 .myloc .mydot { display: block; width: 14px; height: 14px; border-radius: 50%;
