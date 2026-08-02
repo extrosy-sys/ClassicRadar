@@ -445,3 +445,10 @@ pre-composited image per frame (`/frame/{prod}/{ts}.png`, L.imageOverlay double-
 tile flicker possible. Tiles (load-gated, pre-reveal retry, dead-frame skip, fadeAnimation off)
 remain for zoomed-in + keyless. `window.CR_MAP` = deliberate debug handle for automated checks
 (pane never finishes animated zooms — always pass {animate:false}).
+
+## Wildfires + smoke (2026-08-02): `c-fire` (keyless-capable) = WFIGS incidents (🔥 divIcons
+sized by acreage, RX dimmed; popup name/acres/contained/discovered/cause/personnel) + mapped
+perimeters (orange fills), chain server /api/fires → direct NIFC → Esri Living Atlas mirror
+(`agolJson` rejects AGOL''s 200-with-error quota bodies). `c-smoke` (◆ server) = HMS analyst
+polygons, light/medium/heavy gray fills. Panes smoke 334 / fire 346; 10/20-min caches;
+autoRefresh + Reload wired. Verified live: 542 fire points + 225 perimeters + 101 smoke polys.

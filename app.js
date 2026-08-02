@@ -44,7 +44,9 @@ function Pq(sel) { return panelDoc.querySelector(sel); }
 function pane(name, z) { map.createPane(name); map.getPane(name).style.zIndex = z; }
 pane("radar", 250);
 pane("velocity", 260);
+pane("smoke", 334);           // HMS smoke fills (under everything vector)
 pane("wind", 336);            // animated wind-particle canvas (above radar, below vectors)
+pane("fire", 346);            // wildfire perimeters + incident markers
 pane("outlook", 340);         // SPC convective-outlook risk areas (background)
 pane("tropical", 344);        // NHC cones/tracks/points (background, above outlook)
 pane("clutter", 350);
@@ -222,6 +224,7 @@ function srvSetState(url, health) {
   SRV.synoptic = !!(health && health.caps && health.caps.synoptic);
   SRV.comp = (health && health.caps && health.caps.composite) || null;
   SRV.tropical = !!(health && health.caps && health.caps.tropical);
+  SRV.smoke = !!(health && health.caps && health.caps.smoke);
   var badge = document.getElementById("srvbadge");
   if (badge) {
     badge.style.display = SRV.up ? "" : "none";
@@ -251,6 +254,16 @@ function srvSetState(url, health) {
   }
   if (tropOk && !wasUp) loadTropical();
   if (!tropOk) tropicalLayer.clearLayers();
+  var scb = document.getElementById("c-smoke");
+  var stag = document.getElementById("tag-smoke");
+  var smokeOk = SRV.up && SRV.smoke;
+  if (scb) scb.disabled = !smokeOk;
+  if (stag) {
+    stag.textContent = smokeOk ? "◆" : "◆ needs server";
+    stag.title = smokeOk ? "HMS smoke via the enhancement server" : "Needs the enhancement server (KML source has no CORS)";
+  }
+  if (smokeOk && !wasUp) loadSmoke();
+  if (!smokeOk) smokeLayer.clearLayers();
   updateHistControl();               // 24-h loop-end scrubbing is a server feature too
   var st = document.getElementById("server-status");
   if (st) {
@@ -1414,6 +1427,8 @@ var topsLayer = L.layerGroup([], { pane:"tops" }).addTo(map);         // storm-t
 var outlookLayer = L.layerGroup([], { pane:"outlook" }).addTo(map);   // SPC convective outlook (toggle)
 var watchesLayer = L.layerGroup([], { pane:"watches" }).addTo(map);   // SPC watch boxes (toggle)
 var mcdLayer = L.layerGroup([], { pane:"mcd" }).addTo(map);           // SPC mesoscale discussions (toggle)
+var fireLayer = L.layerGroup([], { pane:"fire" }).addTo(map);         // wildfires (toggle)
+var smokeLayer = L.layerGroup([], { pane:"smoke" }).addTo(map);       // HMS smoke (toggle, ◆ server)
 var tropicalLayer = L.layerGroup([], { pane:"tropical" }).addTo(map); // NHC tropical (toggle, ◆ server)
 var metarLayer = L.layerGroup([], { pane:"metar" }).addTo(map);       // METAR surface obs (toggle)
 var lastL3 = null;
@@ -1910,6 +1925,8 @@ document.getElementById("c-outlook").addEventListener("change", loadOutlook);
 document.getElementById("c-watches").addEventListener("change", loadWatches);
 document.getElementById("c-mcd").addEventListener("change", loadMcd);
 document.getElementById("c-tropical").addEventListener("change", loadTropical);
+document.getElementById("c-fire").addEventListener("change", loadFires);
+document.getElementById("c-smoke").addEventListener("change", loadSmoke);
 document.getElementById("c-metar").addEventListener("change", loadMetar);
 document.getElementById("c-iem").addEventListener("change", syncIem);
 map.on("zoomend", syncIem);
@@ -2247,6 +2264,110 @@ function loadMcd() {
           '<br><a href="https://www.spc.noaa.gov/products/md/md' + esc(p.num) +
           '.html" target="_blank" rel="noopener">full discussion &rarr;</a>')
         .addTo(mcdLayer);
+    });
+  });
+}
+
+/* ===================== WILDFIRES + SMOKE ===================== */
+/* Wildfires: NIFC WFIGS incidents + perimeters. Enhanced = the server's 10-min cache
+   (their shared AGOL quota 429s under load); keyless = direct, NIFC then the Esri Living
+   Atlas mirror (separate quota). AGOL reports quota errors as HTTP 200 + {"error":…}. */
+var FIRE_UPSTREAMS = [
+  ["https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Incident_Locations_Current/FeatureServer/0/query",
+   "https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Interagency_Perimeters_Current/FeatureServer/0/query"],
+  ["https://services9.arcgis.com/RHVPKKiFTONKtxq3/arcgis/rest/services/USA_Wildfires_v1/FeatureServer/0/query",
+   "https://services9.arcgis.com/RHVPKKiFTONKtxq3/arcgis/rest/services/USA_Wildfires_v1/FeatureServer/1/query"]
+];
+var FIRE_Q = "?where=1%3D1&outFields=*&geometryPrecision=4&f=geojson";
+var FIRE_QSIMP = "?where=1%3D1&outFields=*&maxAllowableOffset=0.002&geometryPrecision=4&f=geojson";
+var fireCache = null, fireFetched = 0;
+
+function agolJson(url) {   // fetch that rejects AGOL's 200-with-error bodies
+  return fetch(url).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function (j) { if (j.error) throw new Error("agol " + j.error.code); return j; });
+}
+function fireAcres(p) {
+  return p.DailyAcres || p.CalculatedAcres || p.GISAcres || p.DiscoveryAcres || p.FinalAcres || null;
+}
+function loadFires() {
+  fireLayer.clearLayers();
+  if (!document.getElementById("c-fire").checked) return;
+  var p = (fireCache && Date.now() - fireFetched < 600000) ? Promise.resolve(fireCache)
+    : (SRV.up
+        ? fetch(SRV.url + "/api/fires").then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        : Promise.reject(0))
+      .catch(function () {
+        // keyless direct: try each upstream pair until one answers
+        function tryPair(i) {
+          if (i >= FIRE_UPSTREAMS.length) return null;
+          return agolJson(FIRE_UPSTREAMS[i][0] + FIRE_Q).then(function (pts) {
+            return agolJson(FIRE_UPSTREAMS[i][1] + FIRE_QSIMP)
+              .catch(function () { return { features: [] }; })
+              .then(function (per) {
+                (per.features || []).forEach(function (f) { (f.properties || {}).kind = "perim"; });
+                (pts.features || []).forEach(function (f) { (f.properties || {}).kind = "pt"; });
+                return { features: (pts.features || []).concat(per.features || []) };
+              });
+          }).catch(function () { return tryPair(i + 1); });
+        }
+        return tryPair(0);
+      })
+      .then(function (j) { if (j) { fireCache = j; fireFetched = Date.now(); } return j; });
+  p.then(function (j) {
+    if (!j || !document.getElementById("c-fire").checked) return;
+    (j.features || []).forEach(function (f) {
+      var pr = f.properties || {};
+      if (pr.kind === "perim" || (f.geometry && f.geometry.type !== "Point" && pr.kind !== "pt")) {
+        L.geoJSON(f.geometry, { pane:"fire", style:{ color:"#d84315", weight:1.5, fill:true,
+          fillColor:"#ff5722", fillOpacity:0.22 } })
+          .bindPopup("<b>" + esc(pr.IncidentName || "Fire") + "</b> — mapped perimeter" +
+            (pr.GISAcres ? "<br>" + Math.round(pr.GISAcres).toLocaleString() + " acres" : ""))
+          .addTo(fireLayer);
+      } else if (f.geometry && f.geometry.type === "Point") {
+        var c = f.geometry.coordinates;
+        var rx = pr.IncidentTypeCategory === "RX";
+        var acres = fireAcres(pr);
+        var big = acres && acres > 10000;
+        L.marker([c[1], c[0]], { pane:"fire", icon: L.divIcon({ className: rx ? "firepx" : "firept",
+            html:"&#128293;", iconSize: big ? [26,26] : [18,18], iconAnchor: big ? [13,13] : [9,9] }) })
+          .bindPopup("<b>" + esc(pr.IncidentName || "Fire") + "</b>" +
+            (rx ? ' <span style="color:#2e7d32">(prescribed burn)</span>' : "") +
+            (acres ? "<br>" + Math.round(acres).toLocaleString() + " acres" : "") +
+            (pr.PercentContained != null ? "<br>" + esc(pr.PercentContained) + "% contained" : "") +
+            (pr.FireDiscoveryDateTime ? "<br>discovered " +
+              new Date(pr.FireDiscoveryDateTime).toLocaleDateString() : "") +
+            (pr.POOState ? "<br>" + esc(String(pr.POOState).replace("US-", "")) : "") +
+            (pr.FireCause ? " · cause: " + esc(pr.FireCause) : "") +
+            (pr.TotalIncidentPersonnel ? "<br>" + esc(pr.TotalIncidentPersonnel) + " personnel" : ""))
+          .addTo(fireLayer);
+      }
+    });
+  });
+}
+
+/* HMS analyst smoke polygons (◆ server — the KML source has no CORS). */
+var SMOKE_STYLE = { light:{ c:"#9e9e9e", a:0.16 }, medium:{ c:"#757575", a:0.30 }, heavy:{ c:"#424242", a:0.45 } };
+var smokeCache = null, smokeFetched = 0;
+function loadSmoke() {
+  smokeLayer.clearLayers();
+  var cb = document.getElementById("c-smoke");
+  if (!cb || !cb.checked || !SRV.up || !SRV.smoke) return;
+  var p = (smokeCache && Date.now() - smokeFetched < 1200000) ? Promise.resolve(smokeCache)
+    : fetch(SRV.url + "/api/smoke")
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (j) { smokeCache = j; smokeFetched = Date.now(); return j; })
+        .catch(function () { srvFail(); return smokeCache; });
+  p.then(function (j) {
+    if (!j || !document.getElementById("c-smoke").checked) return;
+    (j.features || []).forEach(function (f) {
+      var pr = f.properties || {};
+      var st = SMOKE_STYLE[pr.density] || SMOKE_STYLE.light;
+      L.geoJSON(f.geometry, { pane:"smoke", style:{ color:st.c, weight:1, fill:true,
+        fillColor:st.c, fillOpacity:st.a } })
+        .bindPopup("<b>Smoke — " + esc(pr.density) + "</b> (NOAA HMS analyst)" +
+          (pr.start ? "<br>valid " + esc(pr.start) + (pr.end ? " → " + esc(pr.end) : "") : "") +
+          (pr.satellite ? "<br>" + esc(pr.satellite) : ""))
+        .addTo(smokeLayer);
     });
   });
 }
@@ -2633,8 +2754,9 @@ document.getElementById("refresh").addEventListener("click", function () {
   if (src === "rv" || src === "sat") loadRainViewer();
   else if (src === "precip" || src === "mrms") applyProduct();   // re-request the layer + loop
   eetCache = {}; dvlCache = {}; alertsCache = null; geoCache = {}; tropCache = null;  // force-refresh Level III + alerts + vectors
+  fireCache = null; smokeCache = null;
   loadWarnings();
-  loadOutlook(); loadWatches(); loadMcd(); loadTropical(); loadMetar();   // no-ops when their toggles are off
+  loadOutlook(); loadWatches(); loadMcd(); loadTropical(); loadFires(); loadSmoke(); loadMetar();   // no-ops when their toggles are off
 });
 
 /* ===================== AUTO-REFRESH (live mode) =====================
@@ -2667,6 +2789,8 @@ function autoRefresh() {
   if (document.getElementById("c-metar").checked) loadMetar();
   if (document.getElementById("c-mcd").checked) loadMcd();            // 5-min cache gates
   if (document.getElementById("c-tropical").checked) loadTropical();  // 10-min cache gates
+  if (document.getElementById("c-fire").checked) loadFires();         // 10-min cache gates
+  if (document.getElementById("c-smoke").checked) loadSmoke();        // 20-min cache gates
 }
 setInterval(function () {
   var el = document.getElementById("autonext");
@@ -2741,7 +2865,7 @@ map.on("zoomend", function () {
    not sent to any server, no size limit, and this is a static site. */
 var PREFS_KEY = "classicRadar.prefs.v1";
 var PREF_CHECKS = ["c-base","c-county","c-hwy","c-city","c-warn","c-alerts","c-cells","c-tracks",
-                   "c-tops","c-watches","c-outlook","c-mcd","c-tropical","c-metar","c-sites","c-iem",
+                   "c-tops","c-watches","c-outlook","c-mcd","c-tropical","c-fire","c-smoke","c-metar","c-sites","c-iem",
                    "c-autorefresh","c-chime","c-ptfcst"];
 var PREF_SELECTS = ["product","frames","speed","dwell","network"];
 var restoredView = false;

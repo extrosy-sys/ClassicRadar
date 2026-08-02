@@ -573,3 +573,7 @@ option.srvopt:disabled { color: #9aa7b5; font-weight: normal; }
 .tropdev { color: #e8a200; font: bold 13px/14px Arial, sans-serif; text-align: center;
   text-shadow: 0 0 3px #000; }
 .tropstorm span { font-size: 15px; line-height: 18px; filter: drop-shadow(0 0 2px #000); }
+
+/* wildfire markers: 🔥 sized by acreage; prescribed burns dimmed */
+.firept { font-size: 15px; line-height: 1; text-align: center; filter: drop-shadow(0 0 2px #000); }
+.firepx { font-size: 12px; line-height: 1; text-align: center; opacity: 0.55; }
