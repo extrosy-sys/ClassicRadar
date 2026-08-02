@@ -555,3 +555,7 @@ option.srvopt:disabled { color: #9aa7b5; font-weight: normal; }
 .ptfcst .pf-cape { margin-top: 3px; color: #7a1f1f; font-weight: bold; }
 .ptfcst .pf-src { margin-top: 2px; color: #99a; font-size: 9px; }
 .ptfcst .pf-load { color: #667; }
+
+/* loop time-range readout in the playbar */
+#looprange { color: #9fb8da; font-size: 10px; margin-right: 6px; white-space: nowrap; }
+#looprange { color: #9fb8da; }

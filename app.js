@@ -681,26 +681,39 @@ function loadSatLoop() {
   var g = GIBS[kind];
   if (!g) return Promise.resolve(false);
   var spec = loopSpec(10);
-  // newest imagery runs ~25-40 min behind realtime; frames are 10-min aligned
-  var newest = Math.floor((Date.now() / 1000 - 2400) / 600) * 600;
-  var list = [];
-  for (var t = newest - spec.h * 3600; t <= newest; t += spec.step * 60) list.push(t);
-  if (spec.take && list.length > spec.take) list = list.slice(-spec.take);
-  clearFrames();
-  list.forEach(function (secs) {
-    var ts = unixToTs(secs);
-    frameUrls.push(SRV.up
-      ? frameUrlFor(kind, ts)
-      : g.url.replace("/default/default/", "/default/" + TS_ISO(ts) + "/"));
-    frameTimes.push(secs);
+  var listP;
+  if (SRV.up) {
+    // server-validated list: GIBS's per-timestamp holes are removed up front, and asking
+    // also kicks the server's warm + composite pre-builders for these exact frames
+    listP = fetch(SRV.url + "/api/frames?product=" + kind + "&hours=" + spec.h + "&step=" + spec.step)
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (j) { return (j.frames || []).map(tsToUnix); })
+      .catch(function () { srvFail(); return null; });
+  } else listP = Promise.resolve(null);
+  return listP.then(function (list) {
+    if (!list) {
+      // keyless: computed 10-min stamps ~40 min behind realtime (holes are dead-skipped at play)
+      var newest = Math.floor((Date.now() / 1000 - 2400) / 600) * 600;
+      list = [];
+      for (var t = newest - spec.h * 3600; t <= newest; t += spec.step * 60) list.push(t);
+    }
+    if (spec.take && list.length > spec.take) list = list.slice(-spec.take);
+    clearFrames();
+    list.forEach(function (secs) {
+      var ts = unixToTs(secs);
+      frameUrls.push(SRV.up
+        ? frameUrlFor(kind, ts)
+        : g.url.replace("/default/default/", "/default/" + TS_ISO(ts) + "/"));
+      frameTimes.push(secs);
+    });
+    if (req !== loopReq) return false;
+    if (useComposite()) makeCompBuffers("Satellite &copy; NASA GIBS / NOAA GOES-East");
+    else makeBuffers(g.maxNative, "Satellite &copy; NASA GIBS / NOAA GOES-East", "GOES loop");
+    curFrame = frameUrls.length - 1;
+    wireScrub();
+    goLive();
+    return true;
   });
-  if (req !== loopReq) return Promise.resolve(false);
-  if (useComposite()) makeCompBuffers("Satellite &copy; NASA GIBS / NOAA GOES-East");
-  else makeBuffers(g.maxNative, "Satellite &copy; NASA GIBS / NOAA GOES-East", "GOES loop");
-  curFrame = frameUrls.length - 1;
-  wireScrub();
-  goLive();
-  return Promise.resolve(true);
 }
 function TS_ISO(ts) {
   return ts.slice(0, 4) + "-" + ts.slice(4, 6) + "-" + ts.slice(6, 8) + "T" +
@@ -818,6 +831,8 @@ function showFrame(i) {
   }
   if (back._crFrame !== target) setBufferFrame(back, target);
   if (back._crLoaded) commitSwap();
+  else setTileStatus("loading frame " + (target + 1) + "/" + frameUrls.length +
+    (loopMode === "comp" ? " (server assembling)" : "") + "…", "load");
   // not loaded yet -> keep the CURRENT image up; onBufferLoad commits when tiles are in.
   // Playback self-paces: tick keeps asking for the same target until it's ready.
 }
@@ -865,6 +880,13 @@ function wireScrub() {
   var s = document.getElementById("scrub");
   s.max = Math.max(0, frameUrls.length - 1);
   s.value = curFrame;
+  var lr = document.getElementById("looprange");   // what time range this loop covers
+  var srvLoop = SRV.up && frameUrls.length && frameUrls[0].indexOf(SRV.url) === 0;
+  if (lr) lr.textContent = frameTimes.length
+    ? (srvLoop ? "◆ " : "") + fmtStamp(new Date(frameTimes[0] * 1000)).slice(11) + "→" +
+      fmtStamp(new Date(frameTimes[frameTimes.length - 1] * 1000)).slice(11) + " · " + frameTimes.length + "f"
+    : "";
+  if (lr) lr.title = srvLoop ? "Loop frames served/cached by the enhancement server" : "Loop frames fetched directly (keyless)";
 }
 
 function tick() {
