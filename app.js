@@ -2528,6 +2528,19 @@ function loadTropical() {
       } else if (kind === "trk") {
         L.geoJSON(f.geometry, { pane:"tropical", style:{ color:"#404040", weight:2, dashArray:"1 4" } })
           .addTo(tropicalLayer);
+      } else if (kind === "ptrk") {          // where the storm has BEEN — solid history line
+        L.geoJSON(f.geometry, { pane:"tropical", style:{ color:"#606060", weight:2.5 } })
+          .bindPopup("<b>" + esc(pr.stormname || pr.storm) + "</b> — past track")
+          .addTo(tropicalLayer);
+      } else if (kind === "ppt" && f.geometry && f.geometry.type === "Point") {
+        var pc2 = f.geometry.coordinates;
+        if (!window._pptRenderer) window._pptRenderer = L.canvas({ pane:"tropical" });
+        L.circleMarker([pc2[1], pc2[0]], { renderer:window._pptRenderer, pane:"tropical",
+            radius:3, color:"#505050", weight:1, fillColor:"#909090", fillOpacity:0.9 })
+          .bindPopup("<b>" + esc(pr.stormname || pr.storm) + "</b>" +
+            (pr.datelbl || pr.fldatelbl ? "<br>" + esc(pr.datelbl || pr.fldatelbl) : "") +
+            (pr.maxwind ? "<br>" + esc(pr.maxwind) + " kt" : ""))
+          .addTo(tropicalLayer);
       } else if (kind === "fpt" && f.geometry && f.geometry.type === "Point") {
         var c = f.geometry.coordinates;
         var lbl = pr.dvlbl || (pr.ssnum >= 3 ? "M" : pr.maxwind >= 64 ? "H" : pr.maxwind >= 34 ? "S" : "D");
