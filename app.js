@@ -44,6 +44,7 @@ function Pq(sel) { return panelDoc.querySelector(sel); }
 function pane(name, z) { map.createPane(name); map.getPane(name).style.zIndex = z; }
 pane("radar", 250);
 pane("velocity", 260);
+pane("aqi", 332);             // AirNow AQI contour fills (bottom of the vector stack)
 pane("smoke", 334);           // HMS smoke fills (under everything vector)
 pane("wind", 336);            // animated wind-particle canvas (above radar, below vectors)
 pane("fire", 346);            // wildfire perimeters + incident markers
@@ -1504,6 +1505,7 @@ var watchesLayer = L.layerGroup([], { pane:"watches" }).addTo(map);   // SPC wat
 var mcdLayer = L.layerGroup([], { pane:"mcd" }).addTo(map);           // SPC mesoscale discussions (toggle)
 var fireLayer = L.layerGroup([], { pane:"fire" }).addTo(map);         // wildfires (toggle)
 var smokeLayer = L.layerGroup([], { pane:"smoke" }).addTo(map);       // HMS smoke (toggle, ◆ server)
+var aqiLayer = L.layerGroup([], { pane:"aqi" }).addTo(map);           // AirNow AQI contours (toggle)
 var tropicalLayer = L.layerGroup([], { pane:"tropical" }).addTo(map); // NHC tropical (toggle, ◆ server)
 var metarLayer = L.layerGroup([], { pane:"metar" }).addTo(map);       // METAR surface obs (toggle)
 var lastL3 = null;
@@ -2002,6 +2004,7 @@ document.getElementById("c-mcd").addEventListener("change", loadMcd);
 document.getElementById("c-tropical").addEventListener("change", loadTropical);
 document.getElementById("c-fire").addEventListener("change", loadFires);
 document.getElementById("c-smoke").addEventListener("change", loadSmoke);
+document.getElementById("c-aqi").addEventListener("change", loadAqi);
 document.getElementById("c-metar").addEventListener("change", loadMetar);
 document.getElementById("c-iem").addEventListener("change", syncIem);
 map.on("zoomend", syncIem);
@@ -2431,6 +2434,39 @@ function loadFires() {
   });
 }
 
+/* EPA AirNow AQI contours (combined ozone+PM category, keyless AGOL; server caches 30 min).
+   gridcode 1..6 = the standard AQI categories/colors. */
+var AQI_CAT = [null,
+  ["Good", "0–50", "#00e400"], ["Moderate", "51–100", "#ffff00"],
+  ["Unhealthy for Sensitive Groups", "101–150", "#ff7e00"], ["Unhealthy", "151–200", "#ff0000"],
+  ["Very Unhealthy", "201–300", "#8f3f97"], ["Hazardous", "301+", "#7e0023"]];
+var AQI_URL = "https://services.arcgis.com/cJ9YHowT8TU7DUyn/arcgis/rest/services/AirNowLatestContoursCombined/FeatureServer/0/query" +
+  "?where=1%3D1&outFields=gridcode,Unixtime&maxAllowableOffset=0.01&geometryPrecision=3&f=geojson";
+var aqiCache = null, aqiFetched = 0;
+function loadAqi() {
+  aqiLayer.clearLayers();
+  if (!document.getElementById("c-aqi").checked) return;
+  var p = (aqiCache && Date.now() - aqiFetched < 900000) ? Promise.resolve(aqiCache)
+    : (SRV.up
+        ? fetch(SRV.url + "/api/aqi").then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        : Promise.reject(0))
+      .catch(function () { return agolJson(AQI_URL); })
+      .then(function (j) { if (j) { aqiCache = j; aqiFetched = Date.now(); } return j; })
+      .catch(function () { return null; });
+  p.then(function (j) {
+    if (!j || !document.getElementById("c-aqi").checked) return;
+    (j.features || []).forEach(function (f) {
+      var cat = AQI_CAT[(f.properties || {}).gridcode];
+      if (!cat) return;
+      L.geoJSON(f.geometry, { pane:"aqi", style:{ color:cat[2], weight:1, fill:true,
+        fillColor:cat[2], fillOpacity:0.28 } })
+        .bindPopup("<b>Air quality — " + esc(cat[0]) + "</b><br>AQI " + cat[1] + " (EPA AirNow)" +
+          (f.properties.Unixtime ? "<br>" + new Date(f.properties.Unixtime * 1000).toUTCString().slice(17, 25) + " UTC" : ""))
+        .addTo(aqiLayer);
+    });
+  });
+}
+
 /* HMS analyst smoke polygons (◆ server — the KML source has no CORS). */
 var SMOKE_STYLE = { light:{ c:"#9e9e9e", a:0.16 }, medium:{ c:"#757575", a:0.30 }, heavy:{ c:"#424242", a:0.45 } };
 var smokeCache = null, smokeFetched = 0;
@@ -2662,7 +2698,21 @@ function pointForecast(latlng) {
       latlng.lat.toFixed(2) + ", " + latlng.lng.toFixed(2) + "</span>" +
       '<table class="pf"><tr><th>UTC</th><th>&deg;F</th><th>precip</th><th>wind kt</th></tr>' + rows + "</table>" +
       (cape != null ? '<div class="pf-cape">CAPE now: ' + cape + " J/kg</div>" : "") +
-      '<div class="pf-src">Open-Meteo (HRRR/GFS blend)</div></div>');
+      '<div class="pf-aqi"></div><div class="pf-src">Open-Meteo (HRRR/GFS blend)</div></div>');
+    // air quality rides in afterwards (separate keyless API; global incl. Canada)
+    fetch("https://air-quality-api.open-meteo.com/v1/air-quality?latitude=" + latlng.lat.toFixed(3) +
+        "&longitude=" + latlng.lng.toFixed(3) + "&current=us_aqi,pm2_5")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (a) {
+        var c = a && a.current;
+        if (!c || c.us_aqi == null) return;
+        var cat = c.us_aqi <= 50 ? 1 : c.us_aqi <= 100 ? 2 : c.us_aqi <= 150 ? 3 :
+                  c.us_aqi <= 200 ? 4 : c.us_aqi <= 300 ? 5 : 6;
+        var el = document.querySelector(".pf-aqi");
+        if (el) el.innerHTML = 'AQI now: <b style="color:' + AQI_CAT[cat][2] + '">' + Math.round(c.us_aqi) +
+          "</b> (" + esc(AQI_CAT[cat][0]) + ")" +
+          (c.pm2_5 != null ? " · PM2.5 " + Math.round(c.pm2_5) + " µg/m³" : "");
+      }).catch(function () {});
   }).catch(function () { pop.setContent('<div class="ptfcst">Forecast unavailable.</div>'); });
 }
 map.on("click", function (e) {
@@ -2844,9 +2894,9 @@ document.getElementById("refresh").addEventListener("click", function () {
   if (src === "rv" || src === "sat") loadRainViewer();
   else if (src === "precip" || src === "mrms") applyProduct();   // re-request the layer + loop
   eetCache = {}; dvlCache = {}; alertsCache = null; geoCache = {}; tropCache = null;  // force-refresh Level III + alerts + vectors
-  fireCache = null; smokeCache = null;
+  fireCache = null; smokeCache = null; aqiCache = null;
   loadWarnings();
-  loadOutlook(); loadWatches(); loadMcd(); loadTropical(); loadFires(); loadSmoke(); loadMetar();   // no-ops when their toggles are off
+  loadOutlook(); loadWatches(); loadMcd(); loadTropical(); loadFires(); loadSmoke(); loadAqi(); loadMetar();   // no-ops when their toggles are off
 });
 
 /* ===================== AUTO-REFRESH (live mode) =====================
@@ -2883,6 +2933,7 @@ function autoRefresh() {
   if (document.getElementById("c-tropical").checked) loadTropical();  // 10-min cache gates
   if (document.getElementById("c-fire").checked) loadFires();         // 10-min cache gates
   if (document.getElementById("c-smoke").checked) loadSmoke();        // 20-min cache gates
+  if (document.getElementById("c-aqi").checked) loadAqi();            // 15-min cache gates
 }
 setInterval(function () {
   var el = document.getElementById("autonext");
@@ -2957,7 +3008,7 @@ map.on("zoomend", function () {
    not sent to any server, no size limit, and this is a static site. */
 var PREFS_KEY = "classicRadar.prefs.v1";
 var PREF_CHECKS = ["c-base","c-county","c-hwy","c-city","c-warn","c-alerts","c-cells","c-tracks",
-                   "c-tops","c-watches","c-outlook","c-mcd","c-tropical","c-fire","c-smoke","c-metar","c-sites","c-iem",
+                   "c-tops","c-watches","c-outlook","c-mcd","c-tropical","c-fire","c-smoke","c-aqi","c-metar","c-sites","c-iem",
                    "c-autorefresh","c-chime","c-ptfcst"];
 var PREF_SELECTS = ["product","frames","speed","dwell","network"];
 var restoredView = false;

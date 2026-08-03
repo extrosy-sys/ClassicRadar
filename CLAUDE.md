@@ -462,3 +462,8 @@ start/end/PT6M. Also: CWFIS Canadian hotspots render as red canvas-renderer dots
 CA_XX_ASOS province bboxes, Open-Meteo keyless wind grid widened to 62N. HMS smoke + AWC obs +
 GOES already covered Canada. NOT ported (US-only upstreams): Level III cells/tilt/3D, MRMS,
 IEM archive/composites, SPC/NHC. ECCC CAP alerts = known future work.
+## Air quality (2026-08-02): `c-aqi` = EPA AirNow AQI contour polygons in the six standard
+category colors (gridcode 1..6, AQI_CAT), pane z332, chain server /api/aqi → direct AGOL;
+15-min cache. Point-forecast popup gains an "AQI now" line (Open-Meteo air-quality API,
+keyless, global — works in Canada too). Verified live: 189 contours (101 Good … 2 Very
+Unhealthy over the fire regions).
