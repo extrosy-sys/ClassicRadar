@@ -564,13 +564,14 @@ function currentScheme() {
 }
 /* TWO layers, double-buffered: the next frame preloads on the hidden buffer, then we
    swap by opacity -> instant, no clearing/strobe. Only ~2 frames load at once. */
-function makeBuffers(maxNative, attribution, label) {
+function makeBuffers(maxNative, attribution, label, ctor) {
   if (!frameUrls.length) return;
   var lastUrl = frameUrls[frameUrls.length - 1];
+  var make = ctor || L.tileLayer;
   for (var bi = 0; bi < 2; bi++) {
     // NOTE: no attachRetry here on purpose — its out-of-band per-tile retries land AFTER the
     // frame is revealed (visible pop). Loop buffers retry as a whole, BEFORE reveal, below.
-    var lyr = L.tileLayer(lastUrl, { pane:"radar", opacity:0, maxZoom:18,
+    var lyr = make(lastUrl, { pane:"radar", opacity:0, maxZoom:18,
       maxNativeZoom:maxNative, noWrap:true, attribution:attribution }).addTo(map);
     lyr._crFrame = frameUrls.length - 1;
     // load-gating: a frame is revealed only when ALL its tiles are in. A frame that finished
@@ -656,6 +657,7 @@ function loopSpec(baseStep) {
 function loadRainViewer() {
   var src = currentProductSrc();
   if (src === "sat") return loadSatLoop();
+  if (src === "ca") return loadCaLoop();
   if (src === "mrms") return SRV.up ? loadMrmsLoop() : Promise.resolve(false);
   // ---- reflectivity ----
   var fsel = document.getElementById("frames").value;
@@ -815,10 +817,12 @@ function setStillVisible(on) {
   if (src === "rv") showIem(on);
   else if (src === "sat" && satLayer) satLayer.setOpacity(on ? radarOpacity() : 0);
   else if (src === "mrms" && mrmsLayer) mrmsLayer.setOpacity(on ? radarOpacity() : 0);
+  else if (src === "ca" && caLayer) caLayer.setOpacity(on ? radarOpacity() : 0);
 }
 function liveStampText() {
   var src = currentProductSrc();
-  return src === "sat" ? "GOES latest" : src === "mrms" ? "MRMS latest" : "IEM current";
+  return src === "sat" ? "GOES latest" : src === "mrms" ? "MRMS latest"
+    : src === "ca" ? "ECCC latest" : "IEM current";
 }
 
 /* return to the current still (every animatable product) */
@@ -1018,6 +1022,69 @@ function rvNote() {
     "); ◉ LIVE returns to the current still.";
 }
 
+/* ===================== CANADA RADAR (ECCC GeoMet, keyless) =====================
+   GeoMet is a plain WMS (CORS *, no key) with a native TIME dimension: the rain/snow
+   composites keep ~3 h of 6-min frames, so loops work exactly like the GIBS satellite —
+   fully keyless. The layer template URL carries the GetMap base (+ optional &time=ISO);
+   getTileUrl appends the per-tile EPSG:3857 bbox, so setUrl() frame-swapping works with
+   the standard loop buffers. */
+var GEOMET = "https://geo.weather.gc.ca/geomet";
+var CaWmsLayer = L.TileLayer.extend({
+  getTileUrl: function (coords) {
+    var res = (2 * WEBMERC_MAX) / (256 * Math.pow(2, coords.z));
+    var minx = -WEBMERC_MAX + coords.x * 256 * res, maxx = minx + 256 * res;
+    var maxy = WEBMERC_MAX - coords.y * 256 * res, miny = maxy - 256 * res;
+    return this._url + "&bbox=" + minx + "," + miny + "," + maxx + "," + maxy;
+  }
+});
+function caWmsFactory(url, opts) { return new CaWmsLayer(url, opts); }
+function caGetMapUrl(layer, isoTime) {
+  return GEOMET + "?service=WMS&version=1.3.0&request=GetMap&layers=" + layer +
+    "&styles=&crs=EPSG:3857&width=256&height=256&format=image/png&transparent=true" +
+    (isoTime ? "&time=" + encodeURIComponent(isoTime) : "");
+}
+var caLayer = null;
+function clearCa() { if (caLayer) { map.removeLayer(caLayer); caLayer = null; } }
+function showCa(layer) {
+  clearCa();
+  caLayer = attachRetry(new CaWmsLayer(caGetMapUrl(layer, null), { pane:"radar",
+    opacity:radarOpacity(), maxZoom:18, maxNativeZoom:11, noWrap:true,
+    attribution:"Radar &copy; ECCC GeoMet" }), "GeoMet").addTo(map);
+}
+/* frame list from the layer's WMS time dimension: "startISO/endISO/PT6M" */
+function loadCaLoop() {
+  var req = ++loopReq;
+  var sel = document.getElementById("product");
+  var layer = sel.options[sel.selectedIndex].getAttribute("data-ca");
+  var spec = loopSpec(6);
+  return fetch(GEOMET + "?service=WMS&version=1.3.0&request=GetCapabilities&layer=" + layer)
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+    .then(function (xml) {
+      if (req !== loopReq) return false;
+      var m = xml.match(new RegExp('<Layer[^>]*>[\\s\\S]*?<Name>' + layer +
+        '</Name>[\\s\\S]*?<Dimension name="time"[^>]*>([^<]*)</Dimension>'));
+      var dim = (m && m[1]) || "";
+      var parts = dim.split("/");
+      if (parts.length < 3) throw new Error("no time dimension");
+      var t0 = Date.parse(parts[0]) / 1000, t1 = Date.parse(parts[1]) / 1000;
+      var list = [];
+      for (var t = t0; t <= t1 + 1; t += 360) list.push(t);
+      var take = spec.take || Math.floor(spec.h * 3600 / 360) + 1;
+      if (list.length > take) list = list.slice(-take);
+      clearFrames();
+      list.forEach(function (secs) {
+        frameUrls.push(caGetMapUrl(layer, new Date(secs * 1000).toISOString().replace(".000", "")));
+        frameTimes.push(secs);
+      });
+      makeBuffers(11, "Radar &copy; ECCC GeoMet", "GeoMet loop", caWmsFactory);
+      curFrame = frameUrls.length - 1;
+      wireScrub();
+      goLive();
+      return true;
+    })
+    .catch(function () { setTileStatus("GeoMet loop unavailable", "err"); return false; });
+}
+
 /* ===================== ANIMATED WINDS (flowing particles, color = speed) =====================
    ◆ enhanced = GFS 0.5° U/V grids from the server (/api/wind, NOMADS-decoded);
    keyless = a coarse Open-Meteo grid built from one batch call — works everywhere. */
@@ -1079,8 +1146,8 @@ function showWind(level) {
   });
 }
 function windFromOpenMeteo(level) {
-  var NX = 17, NY = 9, LA0 = 24, LO0 = -125;
-  var dlat = (50 - LA0) / (NY - 1), dlon = (-66 - LO0) / (NX - 1);
+  var NX = 17, NY = 12, LA0 = 24, LO0 = -128;
+  var dlat = (62 - LA0) / (NY - 1), dlon = (-60 - LO0) / (NX - 1);   // CONUS + southern Canada
   var la = [], lo = [];
   for (var y = 0; y < NY; y++) for (var x = 0; x < NX; x++) {
     la.push((LA0 + y * dlat).toFixed(2)); lo.push((LO0 + x * dlon).toFixed(2));
@@ -1186,7 +1253,7 @@ function applyProduct() {
   var note = document.getElementById("prodnote");
   pause();
   if (srvActive) closeSingleRadar(false);                // changing product drops the single-radar overlay
-  clearPrecip(); clearPrecipKey(); clearMrms(); clearWind();   // and any MRMS/wind layer + key
+  clearPrecip(); clearPrecipKey(); clearMrms(); clearWind(); clearCa();   // and any MRMS/wind/CA layer + key
   document.getElementById("legend").style.display = (src === "rv") ? "" : "none";  // dBZ scale is refl-only
 
   if (src === "rv") {
@@ -1224,6 +1291,14 @@ function applyProduct() {
       note.textContent = "Requires the enhancement server (not connected).";
       document.getElementById("stamp").textContent = "server n/a";
     }
+  } else if (src === "ca") {
+    clearSat();
+    setPlaybar(true);
+    showCa(opt.getAttribute("data-ca"));
+    note.textContent = opt.text + " — Environment Canada composite (ECCC GeoMet, ~6-min updates," +
+      " fully keyless). Press PLAY for the ~3-h loop; ◉ LIVE returns to the latest scan.";
+    document.getElementById("stamp").textContent = "ECCC latest";
+    loadRainViewer();                            // builds the GeoMet frame list
   } else if (src === "wind") {
     clearSat(); clearFrames();
     setPlaybar(false);
@@ -2323,6 +2398,17 @@ function loadFires() {
           .bindPopup("<b>" + esc(pr.IncidentName || "Fire") + "</b> — mapped perimeter" +
             (pr.GISAcres ? "<br>" + Math.round(pr.GISAcres).toLocaleString() + " acres" : ""))
           .addTo(fireLayer);
+      } else if (pr.kind === "hot" && f.geometry && f.geometry.type === "Point") {
+        var hc = f.geometry.coordinates;   // Canadian satellite hotspots (CWFIS, via ◆ server)
+        if (!window._hotRenderer) window._hotRenderer = L.canvas({ pane:"fire" });
+        L.circleMarker([hc[1], hc[0]], { renderer:window._hotRenderer, pane:"fire",
+            radius:3.5, color:"#b71c1c", weight:1, fillColor:"#ff1744", fillOpacity:0.8 })
+          .bindPopup("<b>Satellite fire hotspot</b> (CWFIS)" +
+            (pr.agency ? "<br>agency: " + esc(pr.agency) : "") +
+            (pr.frp ? "<br>fire power " + esc(pr.frp) + " MW" : "") +
+            (pr.estarea ? "<br>est. " + esc(pr.estarea) + " ha" : "") +
+            (pr.rep_date ? "<br>" + esc(pr.rep_date) : ""))
+          .addTo(fireLayer);
       } else if (f.geometry && f.geometry.type === "Point") {
         var c = f.geometry.coordinates;
         var rx = pr.IncidentTypeCategory === "RX";
@@ -2467,7 +2553,11 @@ var STATE_BBOX = {  // [south, west, north, east]
   OH:[38.3,-84.9,42,-80.5],OK:[33.6,-103.1,37.1,-94.4],OR:[41.9,-124.6,46.3,-116.4],PA:[39.7,-80.6,42.3,-74.7],
   RI:[41.1,-71.9,42.1,-71.1],SC:[32,-83.4,35.3,-78.5],SD:[42.4,-104.1,45.9,-96.4],TN:[34.9,-90.4,36.7,-81.6],
   TX:[25.8,-106.7,36.6,-93.5],UT:[36.9,-114.1,42.1,-109],VA:[36.5,-83.7,39.5,-75.2],VT:[42.7,-73.5,45.1,-71.5],
-  WA:[45.5,-124.9,49.1,-116.9],WI:[42.4,-92.9,47.1,-86.8],WV:[37.1,-82.7,40.7,-77.7],WY:[40.9,-111.1,45.1,-104]
+  WA:[45.5,-124.9,49.1,-116.9],WI:[42.4,-92.9,47.1,-86.8],WV:[37.1,-82.7,40.7,-77.7],WY:[40.9,-111.1,45.1,-104],
+  // Canadian provinces — IEM carries these as CA_XX_ASOS networks (keyless like the states)
+  CA_BC:[48.2,-139.1,60.1,-114],CA_AB:[48.9,-120.1,60.1,-109.9],CA_SK:[48.9,-110.1,60.1,-101.3],
+  CA_MB:[48.9,-102.1,60.1,-88.9],CA_ON:[41.6,-95.3,56.9,-74.2],CA_QC:[44.9,-79.9,62.7,-57],
+  CA_NB:[44.5,-69.2,48.2,-63.7],CA_NS:[43.3,-66.5,47.2,-59.6]
 };
 function statesInView(b) {
   var out = [];
@@ -2781,6 +2871,8 @@ function refreshStill() {
     if (precipLayer) { precipLayer._crBust = Date.now(); precipLayer.redraw(); }
   } else if (src === "mrms") {
     refreshMrms(opt.getAttribute("data-mrms"));
+  } else if (src === "ca") {
+    if (!usingFrames) showCa(opt.getAttribute("data-ca"));   // re-pull the latest GeoMet scan
   }
 }
 function autoRefresh() {

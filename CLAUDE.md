@@ -452,3 +452,13 @@ perimeters (orange fills), chain server /api/fires → direct NIFC → Esri Livi
 (`agolJson` rejects AGOL''s 200-with-error quota bodies). `c-smoke` (◆ server) = HMS analyst
 polygons, light/medium/heavy gray fills. Panes smoke 334 / fire 346; 10/20-min caches;
 autoRefresh + Reload wired. Verified live: 542 fire points + 225 perimeters + 101 smoke polys.
+## Canada round (2026-08-02): "Canada (ECCC GeoMet)" optgroup — rain (RADAR_1KM_RRAI) + snow
+(RSNO) composites, fully KEYLESS: GeoMet WMS is CORS * with a native TIME dimension (~3 h of
+6-min frames). `CaWmsLayer` (L.TileLayer subclass) keeps the GetMap base in _url and appends the
+per-tile 3857 bbox, so `setUrl()` frame swaps work with the standard loop buffers (makeBuffers
+grew an optional ctor param); frame list parsed from GetCapabilities <Dimension name="time">
+start/end/PT6M. Also: CWFIS Canadian hotspots render as red canvas-renderer dots in c-fire
+(3000 of them — one shared L.canvas, NOT SVG markers), IEM obs fallback extended with 8
+CA_XX_ASOS province bboxes, Open-Meteo keyless wind grid widened to 62N. HMS smoke + AWC obs +
+GOES already covered Canada. NOT ported (US-only upstreams): Level III cells/tilt/3D, MRMS,
+IEM archive/composites, SPC/NHC. ECCC CAP alerts = known future work.
