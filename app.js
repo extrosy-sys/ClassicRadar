@@ -205,12 +205,15 @@ function srvSaveUrl(u) { try { localStorage.setItem(SRV_KEY, u); } catch (e) {} 
 /* ---- rotating client debug log (last 400 lines) — "Debug log" button opens it in a popup
    you can select-all + copy. Captures server state changes, enhanced-fetch failures, loop
    decisions, and every uncaught JS error. ---- */
+var SITE_VERSION = "2026-08-16.1";   // bump on every deploy — shown in the masthead + debug log
 var CLOG = [];
 function clog(s) {
   var d = new Date();
   CLOG.push(pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes()) + ":" + pad(d.getUTCSeconds()) + "Z " + s);
   if (CLOG.length > 400) CLOG.splice(0, CLOG.length - 400);
 }
+clog("site v" + SITE_VERSION + " boot");
+(function () { var sv = document.getElementById("sitever"); if (sv) sv.textContent = "v" + SITE_VERSION; })();
 window.addEventListener("error", function (e) {
   clog("JS ERROR " + (e.message || "?") + " @ " + (e.filename || "").split("/").pop() + ":" + e.lineno);
 });
@@ -219,6 +222,7 @@ window.addEventListener("unhandledrejection", function (e) {
 });
 function showDebugLog() {
   var meta = "Classic Radar debug log — " + new Date().toISOString() + "\n" +
+    "site v" + SITE_VERSION + " · server v" + (SRV.version || "n/a") + "\n" +
     "page: " + location.href + "\nUA: " + navigator.userAgent + "\n" +
     "server: " + (SRV.url || "(none)") + " up=" + SRV.up + " fails=" + SRV.fails +
     " comp=" + !!SRV.comp + " mrms=" + SRV.mrms.length + "\n" +
@@ -282,6 +286,7 @@ function srvSetState(url, health) {
   var wasUp = SRV.up;
   if (wasUp !== !!health) clog("server " + (health ? "CONNECTED " + url + " v" + (health.version || "?") : "DOWN (was " + (url || "none") + ")"));
   SRV.url = url; SRV.up = !!health; SRV.fails = 0;
+  SRV.version = (health && health.version) || SRV.version;
   SRV.mrms = (health && health.caps && health.caps.mrms) || [];
   SRV.synoptic = !!(health && health.caps && health.caps.synoptic);
   SRV.comp = (health && health.caps && health.caps.composite) || null;
@@ -292,6 +297,8 @@ function srvSetState(url, health) {
     badge.style.display = SRV.up ? "" : "none";
     badge.title = SRV.up ? "Server-provided: " + srvCapsSummary() : "";
   }
+  var sv = document.getElementById("sitever");
+  if (sv) sv.textContent = "v" + SITE_VERSION + (SRV.up && SRV.version ? " · srv " + SRV.version : "");
   // server-only options stay VISIBLE either way — green ◆ when live, grayed when not —
   // so it's always clear what enhanced mode adds
   var og = document.getElementById("srv-products");
