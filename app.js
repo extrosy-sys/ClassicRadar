@@ -1071,12 +1071,18 @@ function histShowLabel() {
 (function () {
   var s = document.getElementById("histend");
   if (!s) return;
+  var commitT = null;
   s.addEventListener("input", histShowLabel);                 // live label while dragging
-  s.addEventListener("change", function () {                  // commit on release
+  s.addEventListener("change", function () {                  // commit on release…
     var i = +s.value;
     loopEndTs = (!histStamps.length || i >= histStamps.length - 1) ? null : histStamps[i];
     histShowLabel();
-    loadRainViewer();
+    // …but DEBOUNCED: scrubbing back and forth fires many change events, and each rebuild
+    // tears down + refetches the whole loop — seven rebuilds in seven seconds wedged a
+    // slower client. One rebuild, 400 ms after the last release.
+    pause();
+    clearTimeout(commitT);
+    commitT = setTimeout(function () { loadRainViewer(); }, 400);
   });
 })();
 
