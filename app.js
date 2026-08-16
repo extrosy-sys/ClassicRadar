@@ -202,9 +202,50 @@ var SRV = { url: "", up: false, mrms: [], fails: 0 };
 var SRV_KEY = "classicRadar.server.v1";
 function srvSavedUrl() { try { return localStorage.getItem(SRV_KEY) || ""; } catch (e) { return ""; } }
 function srvSaveUrl(u) { try { localStorage.setItem(SRV_KEY, u); } catch (e) {} }
+/* ---- rotating client debug log (last 400 lines) — "Debug log" button opens it in a popup
+   you can select-all + copy. Captures server state changes, enhanced-fetch failures, loop
+   decisions, and every uncaught JS error. ---- */
+var CLOG = [];
+function clog(s) {
+  var d = new Date();
+  CLOG.push(pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes()) + ":" + pad(d.getUTCSeconds()) + "Z " + s);
+  if (CLOG.length > 400) CLOG.splice(0, CLOG.length - 400);
+}
+window.addEventListener("error", function (e) {
+  clog("JS ERROR " + (e.message || "?") + " @ " + (e.filename || "").split("/").pop() + ":" + e.lineno);
+});
+window.addEventListener("unhandledrejection", function (e) {
+  clog("UNHANDLED " + (e.reason && (e.reason.message || e.reason)));
+});
+function showDebugLog() {
+  var meta = "Classic Radar debug log — " + new Date().toISOString() + "\n" +
+    "page: " + location.href + "\nUA: " + navigator.userAgent + "\n" +
+    "server: " + (SRV.url || "(none)") + " up=" + SRV.up + " fails=" + SRV.fails +
+    " comp=" + !!SRV.comp + " mrms=" + SRV.mrms.length + "\n" +
+    "product: " + document.getElementById("product").value + " frames: " + document.getElementById("frames").value +
+    " zoom: " + map.getZoom() + " center: " + map.getCenter().lat.toFixed(2) + "," + map.getCenter().lng.toFixed(2) + "\n" +
+    "loop: " + frameUrls.length + " frames, mode=" + loopMode + ", cur=" + curFrame + ", dead=" + Object.keys(deadFrames).length +
+    ", playing=" + playing + ", pin=" + (loopEndTs || "live") + "\n" +
+    "----------------------------------------\n";
+  var text = meta + CLOG.join("\n");
+  var w = window.open("", "crlog", "width=760,height=560,scrollbars=yes,resizable=yes");
+  if (!w) { alert("Popup blocked — allow popups for this site, or copy from the console (CR_LOG())."); return; }
+  w.document.open();
+  w.document.write("<!doctype html><title>Classic Radar debug log</title><style>body{margin:0;background:#101820;color:#d8e2ee}" +
+    "textarea{width:100%;height:calc(100vh - 34px);box-sizing:border-box;border:0;padding:8px;background:#101820;color:#d8e2ee;" +
+    "font:11px/1.35 Consolas,monospace;resize:none}div{padding:6px 8px;background:#1b2a3a;font:12px Arial}button{margin-left:8px}</style>" +
+    "<div>Select-all + copy (Ctrl+A, Ctrl+C) and paste it into the chat." +
+    "<button onclick=\"var t=document.querySelector('textarea');t.select();document.execCommand('copy');this.textContent='copied'\">Copy</button></div>" +
+    "<textarea readonly></textarea>");
+  w.document.close();
+  w.document.querySelector("textarea").value = text;
+}
+window.CR_LOG = function () { return CLOG.join("\n"); };   // console fallback
+
 function srvProbe(url, cb) {
   var done = false;
-  var t = setTimeout(function () { if (!done) { done = true; cb(null); } }, 2500);
+  // 8 s: a VM busy backfilling 24 h of tiles can legitimately take a moment on a spinning disk
+  var t = setTimeout(function () { if (!done) { done = true; cb(null); } }, 8000);
   fetch(url + "/health").then(function (r) { return r.ok ? r.json() : null; })
     .then(function (j) { if (!done) { done = true; clearTimeout(t); cb(j && j.ok ? j : null); } })
     .catch(function () { if (!done) { done = true; clearTimeout(t); cb(null); } });
@@ -220,6 +261,7 @@ function srvCapsSummary() {
 }
 function srvSetState(url, health) {
   var wasUp = SRV.up;
+  if (wasUp !== !!health) clog("server " + (health ? "CONNECTED " + url + " v" + (health.version || "?") : "DOWN (was " + (url || "none") + ")"));
   SRV.url = url; SRV.up = !!health; SRV.fails = 0;
   SRV.mrms = (health && health.caps && health.caps.mrms) || [];
   SRV.synoptic = !!(health && health.caps && health.caps.synoptic);
@@ -290,9 +332,25 @@ function srvSetState(url, health) {
     if (fr.value.charAt(0) === "s") { fr.value = "24"; }
   }
 }
+/* An enhanced fetch failed. That does NOT mean the server is down — most of these paths proxy
+   an upstream (AWC, NHC, AGOL…) that can 502 while the server itself is fine, and a 24-h loop
+   can hit a slow moment while composites build. So: don't count failures blindly — ask the
+   server directly (/health) and only degrade if IT doesn't answer. Rate-limited so a burst of
+   failing tiles fires one probe, not fifty. */
+var srvProbing = false, srvLastProbe = 0;
 function srvFail() {
-  if (!SRV.up) return;
-  if (++SRV.fails >= 2) { srvSetState(SRV.url, null); }       // degrade; re-probe timer may recover it
+  if (!SRV.up || srvProbing) return;
+  if (Date.now() - srvLastProbe < 10000) return;   // one verdict per 10 s
+  srvProbing = true; srvLastProbe = Date.now();
+  var url = SRV.url;
+  clog("enhanced fetch failed -> probing /health");
+  srvProbe(url, function (h) {
+    srvProbing = false;
+    if (!SRV.up || SRV.url !== url) return;
+    if (h) { SRV.fails = 0; clog("  /health OK — upstream hiccup, staying enhanced"); return; }
+    clog("  /health FAILED (" + (SRV.fails + 1) + "/2)");
+    if (++SRV.fails >= 2) srvSetState(url, null);  // two straight unanswered probes -> really down
+  });
 }
 function srvInit() {
   var cands = [];
@@ -304,12 +362,20 @@ function srvInit() {
     srvProbe(cands[i], function (h) { if (h) srvSetState(cands[i], h); else next(i + 1); });
   })(0);
 }
-setInterval(function () {          // recover a configured server that comes back (or boots later)
-  if (SRV.up) { srvProbe(SRV.url, function (h) { if (!h) srvFail(); else { SRV.fails = 0; SRV.mrms = (h.caps && h.caps.mrms) || SRV.mrms; } }); return; }
+/* steady-state: verify a live server every 5 min; while DOWN, retry every 30 s so a restart or
+   a transient outage recovers quickly instead of sitting on "unreachable" until a reload */
+var srvTickN = 0;
+setInterval(function () {
+  srvTickN++;
+  if (SRV.up) {
+    if (srvTickN % 10 === 0)     // every 5 min
+      srvProbe(SRV.url, function (h) { if (!h) srvFail(); else { SRV.fails = 0; SRV.mrms = (h.caps && h.caps.mrms) || SRV.mrms; } });
+    return;
+  }
   var saved = srvSavedUrl();
   var cand = saved ? saved.replace(/\/+$/, "") : (/^https?:/.test(location.protocol) ? location.origin : "");
   if (cand) srvProbe(cand, function (h) { if (h) srvSetState(cand, h); });
-}, 300000);
+}, 30000);
 
 /* ---- MRMS severe-weather grids (server-only product) ---- */
 var mrmsLayer = null;
@@ -888,6 +954,7 @@ function commitSwap() {
 function onBufferLoad(lyr) {
   if (wantedFrame < 0) return;
   if (deadFrames[lyr._crFrame]) {
+    clog("frame " + (lyr._crFrame + 1) + " dead (no imagery) — skipped");
     // the frame turned out to be empty upstream — never reveal it; advance past it
     if (lyr._crFrame === wantedFrame) {
       if (playing) showFrame(wantedFrame + 1);
@@ -916,6 +983,9 @@ function wireScrub() {
   var s = document.getElementById("scrub");
   s.max = Math.max(0, frameUrls.length - 1);
   s.value = curFrame;
+  clog("loop built: " + frameUrls.length + " frames, mode=" + loopMode + ", src=" +
+    (frameUrls.length && SRV.up && frameUrls[0].indexOf(SRV.url) === 0 ? "server" : "keyless") +
+    (loopEndTs ? ", pinned " + loopEndTs : ""));
   var lr = document.getElementById("looprange");   // what time range this loop covers
   var srvLoop = SRV.up && frameUrls.length && frameUrls[0].indexOf(SRV.url) === 0;
   if (lr) lr.textContent = frameTimes.length
@@ -2902,6 +2972,7 @@ window.addEventListener("beforeunload", function () {
   if (panelWin && !panelWin.closed) { try { panelWin.close(); } catch (_) {} }
 });
 
+document.getElementById("debuglog").addEventListener("click", showDebugLog);
 document.getElementById("refresh").addEventListener("click", function () {
   var src = currentProductSrc();
   if (src === "rv" || src === "sat") loadRainViewer();

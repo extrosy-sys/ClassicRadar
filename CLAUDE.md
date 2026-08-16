@@ -467,3 +467,15 @@ category colors (gridcode 1..6, AQI_CAT), pane z332, chain server /api/aqi → d
 15-min cache. Point-forecast popup gains an "AQI now" line (Open-Meteo air-quality API,
 keyless, global — works in Canada too). Verified live: 189 contours (101 Good … 2 Very
 Unhealthy over the fire regions).
+## Server-state resilience + client debug log (2026-08-16)
+Eric saw "Server unreachable" while the page was being SERVED by that server, and enhanced mode
+dropping after long 24-h loops. Root cause: `srvFail()` blindly degraded after ANY 2 failed
+enhanced fetches — but most enhanced paths proxy upstreams (AWC/NHC/AGOL) that fail while the
+server is fine, and a 24-h loop hits slow moments. Now a failed enhanced fetch triggers ONE
+direct `/health` probe (rate-limited 10 s); only two straight unanswered probes degrade; probe
+timeout 2.5→8 s (busy VM disk); while down, re-probe every 30 s (was 5 min) so recovery is
+quick. Verified: 6 simulated upstream failures kept enhanced; a real 30-s outage (child killed,
+supervisor restart) never even flickered the badge. **Client debug log**: `clog()` 400-line
+ring (server transitions, probe verdicts, loop builds, dead frames, JS errors/unhandled
+rejections) + Actions "Debug log" button → popup with a diagnostic header (page/UA/server
+state/product/loop) + textarea + Copy; `CR_LOG()` console fallback.
