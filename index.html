@@ -162,6 +162,13 @@
         <div class="checkline"><input type="checkbox" id="c-metar"><label for="c-metar">Surface obs (METAR)<span class="srvtag" id="tag-metar"></span></label></div>
         <div class="checkline"><input type="checkbox" id="c-sites" checked><label for="c-sites">Radar site icons</label></div>
         <div class="checkline"><input type="checkbox" id="c-iem"><label for="c-iem">Force IEM true-dBZ still</label></div>
+        <div class="row" style="margin-top:4px">
+          <label>Time zone</label>
+          <select id="tzmode" class="full">
+            <option value="utc">UTC (Zulu)</option>
+            <option value="local">Local time</option>
+          </select>
+        </div>
         <div class="checkline"><input type="checkbox" id="c-autorefresh" checked><label for="c-autorefresh">Auto-refresh (2 min)</label></div>
         <div class="checkline"><input type="checkbox" id="c-chime"><label for="c-chime">Chime on new warning</label></div>
         <div class="checkline"><input type="checkbox" id="c-ptfcst" checked><label for="c-ptfcst">Click map &rarr; point forecast</label></div>

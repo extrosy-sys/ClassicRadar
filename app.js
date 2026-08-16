@@ -228,17 +228,36 @@ function showDebugLog() {
     ", playing=" + playing + ", pin=" + (loopEndTs || "live") + "\n" +
     "----------------------------------------\n";
   var text = meta + CLOG.join("\n");
-  var w = window.open("", "crlog", "width=760,height=560,scrollbars=yes,resizable=yes");
-  if (!w) { alert("Popup blocked — allow popups for this site, or copy from the console (CR_LOG())."); return; }
-  w.document.open();
-  w.document.write("<!doctype html><title>Classic Radar debug log</title><style>body{margin:0;background:#101820;color:#d8e2ee}" +
-    "textarea{width:100%;height:calc(100vh - 34px);box-sizing:border-box;border:0;padding:8px;background:#101820;color:#d8e2ee;" +
-    "font:11px/1.35 Consolas,monospace;resize:none}div{padding:6px 8px;background:#1b2a3a;font:12px Arial}button{margin-left:8px}</style>" +
-    "<div>Select-all + copy (Ctrl+A, Ctrl+C) and paste it into the chat." +
-    "<button onclick=\"var t=document.querySelector('textarea');t.select();document.execCommand('copy');this.textContent='copied'\">Copy</button></div>" +
-    "<textarea readonly></textarea>");
-  w.document.close();
-  w.document.querySelector("textarea").value = text;
+  // in-page overlay, NOT window.open — popup blockers silently ate the popup version
+  var old = document.getElementById("crlogwrap");
+  if (old) old.parentNode.removeChild(old);
+  var wrap = document.createElement("div");
+  wrap.id = "crlogwrap";
+  wrap.style.cssText = "position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center";
+  var box = document.createElement("div");
+  box.style.cssText = "width:min(760px,94vw);height:min(560px,88vh);background:#101820;border:1px solid #3a5a7e;display:flex;flex-direction:column";
+  var bar = document.createElement("div");
+  bar.style.cssText = "padding:6px 8px;background:#1b2a3a;color:#d8e2ee;font:12px Arial;display:flex;align-items:center;gap:8px";
+  bar.innerHTML = '<span style="flex:1">Debug log — select-all + copy (Ctrl+A, Ctrl+C) and paste into the chat</span>';
+  var copyBtn = document.createElement("button");
+  copyBtn.textContent = "Copy";
+  var closeBtn = document.createElement("button");
+  closeBtn.textContent = "✕";
+  bar.appendChild(copyBtn); bar.appendChild(closeBtn);
+  var ta = document.createElement("textarea");
+  ta.readOnly = true;
+  ta.style.cssText = "flex:1;border:0;padding:8px;background:#101820;color:#d8e2ee;font:11px/1.35 Consolas,monospace;resize:none";
+  ta.value = text;
+  box.appendChild(bar); box.appendChild(ta);
+  wrap.appendChild(box);
+  document.body.appendChild(wrap);
+  copyBtn.onclick = function () {
+    ta.select();
+    try { document.execCommand("copy"); copyBtn.textContent = "copied"; } catch (e) {}
+    if (navigator.clipboard) navigator.clipboard.writeText(ta.value).then(function(){ copyBtn.textContent = "copied"; }, function(){});
+  };
+  closeBtn.onclick = function () { wrap.parentNode.removeChild(wrap); };
+  wrap.addEventListener("click", function (e) { if (e.target === wrap) closeBtn.onclick(); });
 }
 window.CR_LOG = function () { return CLOG.join("\n"); };   // console fallback
 
@@ -1924,11 +1943,30 @@ function selectRow(key) {
 
 /* ============================= HELPERS ============================= */
 function pad(n){ return (n<10?"0":"") + n; }
+/* Time display: UTC ("Z", the classic) or the browser's local zone — #tzmode select, persisted.
+   fmtStamp keeps the "YYYY-MM-DD HH:MM<suffix>" shape either way, so every .slice(11) time-only
+   use (loop range, hist label, clock) works in both modes. */
+function tzLocal() { var s = document.getElementById("tzmode"); return !!(s && s.value === "local"); }
+var _tzAbbr = null;
+function tzAbbr() {
+  if (_tzAbbr) return _tzAbbr;
+  try {
+    var parts = new Date().toLocaleTimeString([], { timeZoneName: "short" }).split(" ");
+    _tzAbbr = " " + parts[parts.length - 1];
+  } catch (e) { _tzAbbr = " local"; }
+  return _tzAbbr;
+}
 function fmtStamp(d) {
+  if (tzLocal())
+    return d.getFullYear() + "-" + pad(d.getMonth()+1) + "-" + pad(d.getDate()) + " " +
+      pad(d.getHours()) + ":" + pad(d.getMinutes()) + tzAbbr();
   return d.getUTCFullYear() + "-" + pad(d.getUTCMonth()+1) + "-" + pad(d.getUTCDate()) + " " +
     pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes()) + "Z";
 }
-function fmtClock(d) { return pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes()) + "Z"; }
+function fmtClock(d) {
+  return tzLocal() ? pad(d.getHours()) + ":" + pad(d.getMinutes()) + tzAbbr()
+                   : pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes()) + "Z";
+}
 function setStatus(t){ document.getElementById("datastatus").textContent = t; }
 function setTableStatus(t){ var e = P("tablestatus"); if (e) e.textContent = t; }
 
@@ -3094,7 +3132,12 @@ var PREFS_KEY = "classicRadar.prefs.v1";
 var PREF_CHECKS = ["c-base","c-county","c-hwy","c-city","c-warn","c-alerts","c-cells","c-tracks",
                    "c-tops","c-watches","c-outlook","c-mcd","c-tropical","c-fire","c-smoke","c-aqi","c-metar","c-sites","c-iem",
                    "c-autorefresh","c-chime","c-ptfcst"];
-var PREF_SELECTS = ["product","frames","speed","dwell","network"];
+var PREF_SELECTS = ["product","frames","speed","dwell","network","tzmode"];
+document.getElementById("tzmode").addEventListener("change", function () {
+  // repaint every visible timestamp in the new zone (the clock re-ticks on its own)
+  if (usingFrames && curFrame >= 0 && frameTimes.length) updateLoopUi(curFrame);
+  wireScrub(); histShowLabel();
+});
 var restoredView = false;
 
 function loadPrefs() { try { return JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") || {}; } catch (e) { return {}; } }

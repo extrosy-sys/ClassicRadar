@@ -479,3 +479,9 @@ supervisor restart) never even flickered the badge. **Client debug log**: `clog(
 ring (server transitions, probe verdicts, loop builds, dead frames, JS errors/unhandled
 rejections) + Actions "Debug log" button → popup with a diagnostic header (page/UA/server
 state/product/loop) + textarea + Copy; `CR_LOG()` console fallback.
+## TZ option + debug-log fix (2026-08-16): "Time zone" select (UTC/local, persisted) —
+fmtStamp/fmtClock branch on it and KEEP the "YYYY-MM-DD HH:MM<suffix>" shape so every
+.slice(11) time-only consumer (clock, loop range, hist label) works in both modes; on change,
+visible stamps repaint. **Debug log popup FIX: window.open was silently popup-blocked on
+Eric''s VM browser — now an in-page fixed overlay (#crlogwrap) with textarea + Copy/close.**
+Verified: panel opens, local mode renders "02:03 CDT" clock + "00:10 CDT→02:00 CDT" range.
