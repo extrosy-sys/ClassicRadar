@@ -210,7 +210,7 @@ function srvSaveUrl(u) { try { localStorage.setItem(SRV_KEY, u); } catch (e) {} 
 /* ---- rotating client debug log (last 400 lines) — "Debug log" button opens it in a popup
    you can select-all + copy. Captures server state changes, enhanced-fetch failures, loop
    decisions, and every uncaught JS error. ---- */
-var SITE_VERSION = "2026-08-21.1";   // bump on every deploy — shown in the masthead + debug log
+var SITE_VERSION = "2026-08-21.2";   // bump on every deploy — shown in the masthead + debug log
 var CLOG = [];
 function clog(s) {
   var d = new Date();

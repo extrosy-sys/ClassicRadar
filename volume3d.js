@@ -107,6 +107,12 @@ window.Volume3D = (function () {
     old.dispose();
   }
 
+  /* true once close() has hidden the panel (and before the first open). Checked by start(),
+     playAnim(), and every async resolve (initial tilt load, neighbour combine, frame fetches)
+     so a download landing AFTER a CLOSE can't restart the render loop, rebuild the hidden
+     volume, or re-hold the decoded tilt arrays close() just freed — open() reloads from scratch. */
+  function isClosed() { return !el || el.style.display === "none"; }
+
   /* ---- temporal animation: loop the last K volume scans ---- */
   function updateFidx() { var e = document.getElementById("v3-fidx"); if (e) e.textContent = animFrames.length ? (animIdx+1)+"/"+animFrames.length : ""; }
   function stopAnim() {
@@ -117,7 +123,7 @@ window.Volume3D = (function () {
     if (animFrames.length < 2) return;
     // never (re)start the loop while the view is closed — fetchFrames resolving AFTER a
     // CLOSE would otherwise restart the 700 ms rebuild interval on a hidden panel
-    if (!el || el.style.display === "none") return;
+    if (isClosed()) return;
     animPlaying = true; document.getElementById("v3-play").textContent = "❚❚";
     if (animTimer) clearInterval(animTimer);
     animTimer = setInterval(function () { animIdx = (animIdx + 1) % animFrames.length; rebuild(); updateFidx(); }, 700);
@@ -127,6 +133,7 @@ window.Volume3D = (function () {
     var p = PRODUCTS[product];
     setStatus("Loading " + K + " frames of " + p.title + " for " + label + " …");
     Promise.all(p.codes.map(function (c) { return Level3.latestKeys(site3, c, K); })).then(function (keyArrs) {
+      if (isClosed()) return;   // CLOSE beat the key listing — skip the MB-scale tilt downloads
       var jobs = [];
       for (var i = 0; i < K; i++) (function (i) {
         jobs.push(Promise.all(p.codes.map(function (c, ci) {
@@ -135,6 +142,7 @@ window.Volume3D = (function () {
         })).then(function (ts) { return ts.filter(Boolean).map(buildGrid); }));
       })(i);
       Promise.all(jobs).then(function (frames) {
+        if (isClosed()) return;   // CLOSE beat the downloads — don't re-hold the decoded frames
         animFrames = frames.filter(function (f) { return f.length; });
         if (animFrames.length < 2) { setStatus("Not enough recent frames available."); animFrames = []; updateFidx(); return; }
         animIdx = animFrames.length - 1;
@@ -169,6 +177,7 @@ window.Volume3D = (function () {
     setStatus("Fetching " + p.title + " tilts for " + label + " …");
     document.getElementById("v3-title").textContent = "VOLUMETRIC STORM — 3D " + p.title;
     fetchRadar(site3).then(function (primary) {
+      if (isClosed()) return;   // CLOSE won the race with the tilt download — stay torn down
       if (!primary.length) { setStatus("No " + p.title + " data available for " + label + "."); if (cloud) { scene.remove(cloud); cloud = null; } return; }
       var plat = primary[0].radarLat, plon = primary[0].radarLon;
       radars = [{ tilts: primary, rx: 0, ry: 0, id: site3 }];
@@ -192,12 +201,13 @@ window.Volume3D = (function () {
       setStatus(label + " — adding " + nbrs.length + " overlapping radar(s) to fill gaps…");
       Promise.all(nbrs.map(function (nb) {
         return fetchRadar(nb.site3).then(function (ts) {
-          if (ts.length) {
+          if (ts.length && !isClosed()) {
             var off = eastNorthKm(plat, plon, ts[0].radarLat, ts[0].radarLon);
             radars.push({ tilts: ts, rx: off[0], ry: off[1], id: nb.site3 });
           }
         }).catch(function () {});
       })).then(function () {
+        if (isClosed()) return;   // CLOSE landed mid-combine — no hidden rebuild
         setStatus(label + " — " + radars.length + " radars combined (" +
           radars.map(function (r) { return r.id; }).join(" + ") + "). Overlap fills each radar's cone of silence.");
         rebuild();        // rebuild the volume with every radar max-combined
@@ -489,7 +499,7 @@ window.Volume3D = (function () {
     var w = host.clientWidth, h = host.clientHeight;
     renderer.setSize(w, h); camera.aspect = w / Math.max(1, h); camera.updateProjectionMatrix();
   }
-  function start() { resize(); if (!raf) loop(); }
+  function start() { if (isClosed()) return; resize(); if (!raf) loop(); }   // never render a hidden panel
   function loop() { raf = requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); }
   function close() {
     // the temporal-loop interval must die with the view: it calls rebuild() (re-grid +

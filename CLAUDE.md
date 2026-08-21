@@ -495,7 +495,14 @@ External review, 10 findings, all fixed:
   700-ms rebuild interval re-gridding/marching-cubes-ing the hidden volume forever (only
   reopening stopped it). `close()` now calls `stopAnim()` + clears animFrames/radars;
   `playAnim()` refuses to start while the panel is hidden (an in-flight fetchFrames resolving
-  after CLOSE used to restart playback).
+  after CLOSE used to restart playback). **Verifier follow-up (v2026-08-21.2)**: the same bail
+  (now a shared `isClosed()`) also guards `start()` and every load()/fetchFrames resolve —
+  CLOSE during the initial multi-second tilt download used to let load()'s .then run
+  rebuild()+start(), restarting the rAF render loop at ~60 fps on the display:none panel
+  (until the next open+close), and a late fetchFrames resolve re-held the decoded tilt arrays
+  + ran one hidden rebuild. Known remaining (pre-existing, unflagged): close→REOPEN while an
+  old fetch is still in flight lets that stale resolve land in the new view (would need a
+  load-generation token like app.js's loopReq).
 - **Boot race**: boot's `loadWarnings()` ran before `loadStations()` resolved → `sitesInView()`
   saw 0 sites → no NST/EET/DVL for returning users (restored view = no centerOnSite moveend)
   until the 120-s refresh. `loadStations().then` now re-runs `loadWarnings()`.
