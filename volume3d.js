@@ -115,6 +115,9 @@ window.Volume3D = (function () {
   }
   function playAnim() {
     if (animFrames.length < 2) return;
+    // never (re)start the loop while the view is closed — fetchFrames resolving AFTER a
+    // CLOSE would otherwise restart the 700 ms rebuild interval on a hidden panel
+    if (!el || el.style.display === "none") return;
     animPlaying = true; document.getElementById("v3-play").textContent = "❚❚";
     if (animTimer) clearInterval(animTimer);
     animTimer = setInterval(function () { animIdx = (animIdx + 1) % animFrames.length; rebuild(); updateFidx(); }, 700);
@@ -488,7 +491,15 @@ window.Volume3D = (function () {
   }
   function start() { resize(); if (!raf) loop(); }
   function loop() { raf = requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); }
-  function close() { if (raf) cancelAnimationFrame(raf); raf = null; el.style.display = "none"; }
+  function close() {
+    // the temporal-loop interval must die with the view: it calls rebuild() (re-grid +
+    // marching cubes, 100-500 ms a pass) every 700 ms and would otherwise keep burning a
+    // core on the hidden panel forever. Also drop the decoded tilt arrays — open() always
+    // reloads from scratch, so they're only holding memory once the view is closed.
+    stopAnim();
+    animFrames = []; radars = []; updateFidx();
+    if (raf) cancelAnimationFrame(raf); raf = null; el.style.display = "none";
+  }
   function setStatus(t) { var s = document.getElementById("v3-status"); if (s) s.textContent = t; }
 
   return { open: open };

@@ -32,7 +32,7 @@ request fails).
 - `index.html` — layout: sidebar (site/product/loop/clutter/actions), map stage with
   directional pan buttons + dBZ legend, playback bar, storm panel (table / Level III text tabs).
 - `styles.css` — clinical boxy look; Arial chrome, Courier data; 3D overlay styles.
-- `app.js` — all logic (single IIFE, Leaflet 1.9.4 from unpkg CDN).
+- `app.js` — all logic (single IIFE, Leaflet 1.9.4 vendored in `vendor/`).
 - `level3.js` — client-side NEXRAD Level III decoder. NST (storm track, via pako/zlib) AND
   super-res reflectivity tilts N0B/N1B/N2B/N3B (`fetchTilt` → bzip2 symbology + packet-16 radials).
 - `bzip2.js` — pure-JS bzip2 decoder (antimatter15), **patched**: the output buffer now grows
@@ -40,6 +40,10 @@ request fails).
 - `volume3d.js` — Three.js (r128) volumetric "MRI" storm view; OrbitControls; dBZ/vertical-
   exaggeration sliders; `preserveDrawingBuffer` on so it can be screenshotted.
 - `sites.js` — fallback station list.
+- `vendor/` — pinned third-party libraries, self-hosted (2026-08-21): Leaflet 1.9.4
+  (css+js+images), pako 2.1.0, three.js r128, OrbitControls r128. Byte-exact copies of the
+  CDN files the page used to load — removes the CDN-compromise XSS surface AND the
+  availability coupling (an unpkg outage used to be a total outage of the public page).
 
 ## 3D volumetric storm view (`volume3d.js`)
 "3D volumetric view" button (or the Volumetric products in the dropdown) → fetches 4 super-res tilts
@@ -485,3 +489,44 @@ fmtStamp/fmtClock branch on it and KEEP the "YYYY-MM-DD HH:MM<suffix>" shape so 
 visible stamps repaint. **Debug log popup FIX: window.open was silently popup-blocked on
 Eric''s VM browser — now an in-page fixed overlay (#crlogwrap) with textarea + Copy/close.**
 Verified: panel opens, local mode renders "02:03 CDT" clock + "00:10 CDT→02:00 CDT" range.
+## Code-review fixes round (2026-08-21, site v2026-08-21.1)
+External review, 10 findings, all fixed:
+- **3D close() leak (high)**: closing the 3D view during a Frames=4/8 temporal loop left the
+  700-ms rebuild interval re-gridding/marching-cubes-ing the hidden volume forever (only
+  reopening stopped it). `close()` now calls `stopAnim()` + clears animFrames/radars;
+  `playAnim()` refuses to start while the panel is hidden (an in-flight fetchFrames resolving
+  after CLOSE used to restart playback).
+- **Boot race**: boot's `loadWarnings()` ran before `loadStations()` resolved → `sitesInView()`
+  saw 0 sites → no NST/EET/DVL for returning users (restored view = no centerOnSite moveend)
+  until the 120-s refresh. `loadStations().then` now re-runs `loadWarnings()`.
+- **XSS hygiene**: API-fed strings now esc()'d at the sinks the convention missed — storm-table
+  `r.event`/`r.area`, site tooltip/popup id+name (Leaflet renders string content as HTML),
+  alerts-card severity class attr; precip-legend swatches whitelist contentType + require pure
+  base64 imageData before landing in an img src.
+- **S3 1000-key truncation**: `Level3._listAll` pages the Unidata bucket listing via
+  `start-after` + IsTruncated (super-res tilts under VCP 212+SAILSx3 exceed 1000 files/UTC-day —
+  "latest" could silently be hours old late in a big severe day; NST/EET/DVL were never at risk).
+- **Lookbehind regex removed** (level3.js NST pair parse): `(?<![\d.])` was the ONE post-ES5
+  construct in the codebase — an early SyntaxError killing ALL of level3.js on Safari/iOS<16.4,
+  and the then-undefined `Level3` threw synchronously inside loadStormData, so even plain NWS
+  warnings never rendered there. Rewritten as a leading boundary group `(^|[^\d.])` (pair
+  extraction proven identical on 13 representative NST lines); loadStormData additionally
+  guards `typeof window.Level3` and fetchNstCached try/catches, so a missing/broken decoder now
+  degrades to warnings-only.
+- **Loop fallback on server loss**: srvSetState's down path now rebuilds an active server-frame
+  loop keyless (frameUrls pointed at the dead server → every frame died → PLAY wedged on the
+  still until a product change). Skipped while the single-radar overlay is up (its loaders end
+  in goLive(), which would yank the user out of that view — a wedged hidden loop is the lesser
+  evil there).
+- **Pages /health polling**: with no saved server URL and no server ever seen this session, the
+  steady-state same-origin re-probe slows 30 s → 10 min (public Pages visitors were 404-polling
+  /health forever). A saved URL, or a mid-session outage of a server that WAS up, keeps 30-s
+  recovery.
+- **Point-forecast AQI popup race**: the late AQI response now writes into ITS popup's element
+  (`pop.isOpen()` + `pop.getElement().querySelector`), not `document.querySelector(".pf-aqi")` —
+  clicking B quickly after A could show A's AQI in B's popup.
+- **CA frame-count**: `#frames` change now also rebuilds `data-src="ca"` (ECCC) loops.
+- **CDN → vendored** (`vendor/`, see Files above): Leaflet/pako/three/OrbitControls self-hosted,
+  index.html points at local paths; no SRI needed since nothing third-party is fetched anymore.
+Still no test harness (static site, no Node on this PC) — the review's suggested golden-file
+Level III fixtures + a Pages console-error smoke remain open ideas.

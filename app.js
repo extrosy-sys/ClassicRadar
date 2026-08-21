@@ -184,7 +184,11 @@ function showPrecipKey(rule) {
     if (!leg || !leg.length) { el.innerHTML = '<div class="pk-title">Precip (in)</div>'; return; }
     function lb(e) { var m = (e.label || "").match(/([\d.]+)/); return m ? m[1] : ""; }
     var ramp = leg.map(function (e) {
-      return '<img class="pk-sw" title="' + esc(e.label) + '" src="data:' + (e.contentType || "image/png") + ";base64," + e.imageData + '">';
+      // the swatches land in an img src attribute — whitelist the MIME type and require the
+      // payload to be pure base64 so API-fed strings can't break out of the attribute
+      var ct = (e.contentType === "image/jpeg" || e.contentType === "image/gif") ? e.contentType : "image/png";
+      if (!/^[A-Za-z0-9+\/=]+$/.test(e.imageData || "")) return "";
+      return '<img class="pk-sw" title="' + esc(e.label) + '" src="data:' + ct + ";base64," + e.imageData + '">';
     }).join("");
     var n = leg.length, idx = [0, Math.floor(n * 0.33), Math.floor(n * 0.66), n - 1];
     var ticks = idx.map(function (i) { return '<span>' + esc(lb(leg[i])) + '</span>'; }).join("");
@@ -200,12 +204,13 @@ function showPrecipKey(rule) {
    on any failure, so a dead/unreachable server just means the site behaves as before. */
 var SRV = { url: "", up: false, mrms: [], fails: 0 };
 var SRV_KEY = "classicRadar.server.v1";
+var srvEverUp = false;   // any server answered this session — gates the same-origin re-probe cadence
 function srvSavedUrl() { try { return localStorage.getItem(SRV_KEY) || ""; } catch (e) { return ""; } }
 function srvSaveUrl(u) { try { localStorage.setItem(SRV_KEY, u); } catch (e) {} }
 /* ---- rotating client debug log (last 400 lines) — "Debug log" button opens it in a popup
    you can select-all + copy. Captures server state changes, enhanced-fetch failures, loop
    decisions, and every uncaught JS error. ---- */
-var SITE_VERSION = "2026-08-16.1";   // bump on every deploy — shown in the masthead + debug log
+var SITE_VERSION = "2026-08-21.1";   // bump on every deploy — shown in the masthead + debug log
 var CLOG = [];
 function clog(s) {
   var d = new Date();
@@ -286,6 +291,7 @@ function srvSetState(url, health) {
   var wasUp = SRV.up;
   if (wasUp !== !!health) clog("server " + (health ? "CONNECTED " + url + " v" + (health.version || "?") : "DOWN (was " + (url || "none") + ")"));
   SRV.url = url; SRV.up = !!health; SRV.fails = 0;
+  if (health) srvEverUp = true;
   SRV.version = (health && health.version) || SRV.version;
   SRV.mrms = (health && health.caps && health.caps.mrms) || [];
   SRV.synoptic = !!(health && health.caps && health.caps.synoptic);
@@ -356,6 +362,15 @@ function srvSetState(url, health) {
     if (optSrc(prod) === "mrms") { prod.value = "N0B"; applyProduct(); }
     var fr = document.getElementById("frames");
     if (fr.value.charAt(0) === "s") { fr.value = "24"; }
+    // an already-built loop still points every frame at the dead server: tiles all error,
+    // frames die one by one, and PLAY wedges on the still. Rebuild it keyless like every
+    // other fallback path. (url is "" on a failed boot probe — only fires on a real
+    // up->down; skipped while the single-radar overlay is up because its loaders end in
+    // goLive(), which would yank the user out of that view.)
+    if (url && !srvActive && frameUrls.length && frameUrls[0].indexOf(url) === 0) {
+      clog("server down with an active server loop -> rebuilding keyless");
+      loadRainViewer();
+    }
   }
 }
 /* An enhanced fetch failed. That does NOT mean the server is down — most of these paths proxy
@@ -400,7 +415,14 @@ setInterval(function () {
   }
   var saved = srvSavedUrl();
   var cand = saved ? saved.replace(/\/+$/, "") : (/^https?:/.test(location.protocol) ? location.origin : "");
-  if (cand) srvProbe(cand, function (h) { if (h) srvSetState(cand, h); });
+  if (!cand) return;
+  // same-origin with no saved URL is only a guess — on the public Pages copy /health can
+  // NEVER succeed, and every visitor was polling a 404 every 30 s for the life of the tab.
+  // Once the boot probe failed and no server has ever answered, slow that guess to every
+  // 10 min. An explicitly saved URL, or an origin that HAS been up this session (a real
+  // mid-session outage), keeps the fast 30-s recovery cadence Eric relies on.
+  if (!saved && !srvEverUp && srvTickN % 20 !== 0) return;
+  srvProbe(cand, function (h) { if (h) srvSetState(cand, h); });
 }, 30000);
 
 /* ---- MRMS severe-weather grids (server-only product) ---- */
@@ -1508,14 +1530,14 @@ function buildSiteMarkers() {
     var m = L.marker([s.lat, s.lon], { pane:"sites", icon: L.divIcon({
       className: "siteicon " + (s.net === "TDWR" ? "tdwr" : "nexrad"),
       iconSize: [11, 11], iconAnchor: [5.5, 5.5], html: '<span class="sdot"></span>' }) });
-    m.bindTooltip(s.id + " — " + s.name, { direction: "top", offset: [0, -5] });
+    m.bindTooltip(esc(s.id + " — " + s.name), { direction: "top", offset: [0, -5] });   // Leaflet renders string content as HTML; id/name are API-fed
     m.on("click", function () { openSitePopup(s); });
     siteLayer.addLayer(m);
   });
   if (document.getElementById("c-sites").checked && !map.hasLayer(siteLayer)) siteLayer.addTo(map);
 }
 function openSitePopup(s) {
-  var html = '<div class="sitepop"><b>' + s.id + '</b> &middot; ' + s.net + '<br>' + s.name + '<br>' +
+  var html = '<div class="sitepop"><b>' + esc(s.id) + '</b> &middot; ' + s.net + '<br>' + esc(s.name) + '<br>' +   // id/name are NWS-API-fed
     s.lat.toFixed(3) + '&deg;, ' + s.lon.toFixed(3) + '&deg;<br>' +
     (s.net === "WSR-88D"
       ? '<button class="sp-single">Open this radar</button><button class="sp-vel">Velocity</button><button class="sp-3d">3D volume</button>'
@@ -1652,9 +1674,14 @@ function sitesInView() {
 function fetchNstCached(site3) {
   var e = l3Cache[site3];
   if (e && Date.now() - e.t < 180000) return Promise.resolve(e.result);
-  return Level3.fetchStormTrack(site3)
-    .then(function (r) { l3Cache[site3] = { t: Date.now(), result: r }; return r; })
-    .catch(function () { return null; });
+  // try/catch: if level3.js failed to load/parse (old browser, missing file), a SYNCHRONOUS
+  // ReferenceError here would abort loadStormData before renderStorm ever ran — taking plain
+  // NWS warnings (which need no Level III) down with it. Degrade to a null result instead.
+  try {
+    return Level3.fetchStormTrack(site3)
+      .then(function (r) { l3Cache[site3] = { t: Date.now(), result: r }; return r; })
+      .catch(function () { return null; });
+  } catch (err) { return Promise.resolve(null); }
 }
 
 function loadStormData() {
@@ -1665,7 +1692,10 @@ function loadStormData() {
     .then(function (j) { return j.features || []; })
     .catch(function () { return []; });
   var svs = [];
-  if (map.getZoom() >= TRACK_MIN_ZOOM) {
+  // window.Level3 can be missing entirely if level3.js failed to parse/load — the direct
+  // Level3.site3() calls below would then throw synchronously and kill the whole warnings
+  // pipeline. With no decoder, run warnings-only (the table's keyless floor).
+  if (map.getZoom() >= TRACK_MIN_ZOOM && typeof window.Level3 !== "undefined") {
     svs = sitesInView();
     if (!svs.length) { var c = map.getCenter(); var n = nearestSite(c.lat, c.lng); if (n) svs = [n]; }
   }
@@ -1895,14 +1925,14 @@ function buildTable(rows) {
     h += '<tr data-key="' + r.key + '">' +
       '<td class="id">' + r.id + '</td>' +
       '<td class="ev"><span class="threat ' + r.cls + '">' + r.glyph + "</span> " + r.threat.toUpperCase() + '</td>' +
-      '<td class="ev">' + r.event + '</td>' +
+      '<td class="ev">' + esc(r.event) + '</td>' +   // NWS props.event — API-fed, escape like the alerts table
       '<td>' + (r.top != null ? r.top : "—") + '</td>' +
       '<td>' + (r.vil != null ? r.vil : "—") + '</td>' +
       '<td>' + (r.hail != null ? r.hail.toFixed(2) : "—") + '</td>' +
       '<td>' + (r.wind != null ? r.wind : "—") + '</td>' +
       '<td class="dir">' + r.dir + '</td>' +
       '<td>' + (r.spd != null ? r.spd : "—") + '</td>' +
-      '<td class="ev">' + r.area + '</td>' +
+      '<td class="ev">' + esc(r.area) + '</td>' +    // NWS props.areaDesc — API-fed, escape
       '<td>' + (r.expires ? fmtClock(r.expires) : "—") + '</td>' +
       '</tr>';
   });
@@ -2075,7 +2105,9 @@ document.getElementById("view3d").addEventListener("click", function () {
 document.getElementById("product").addEventListener("change", applyProduct);
 document.getElementById("frames").addEventListener("change", function () {
   var src = currentProductSrc();
-  if (src === "rv" || src === "sat" || src === "mrms") loadRainViewer();   // rebuild the active loop
+  // "ca" included: every animatable product rebuilds on a frame-count change (loadRainViewer
+  // dispatches ECCC loops to loadCaLoop)
+  if (src === "rv" || src === "sat" || src === "mrms" || src === "ca") loadRainViewer();
 });
 document.getElementById("speed").addEventListener("change", function () { if (playing) play(); });
 
@@ -2236,7 +2268,7 @@ function buildAlertsTable() {
   body.innerHTML = alertsData.map(function (a, i) {
     var areaParts = a.area.split(";");
     var area = esc(areaParts.slice(0, 3).join("; ")) + (areaParts.length > 3 ? " …" : "");
-    return '<div class="alertcard sev-' + a.severity.toLowerCase() + '" data-aid="' + i + '">' +
+    return '<div class="alertcard sev-' + esc(a.severity.toLowerCase()) + '" data-aid="' + i + '">' +   // severity is API-fed; esc keeps it inside the attribute
       '<div class="ah"><span class="asev" style="background:' + alertColor(a.severity) + '">' + esc(a.severity) + '</span>' +
         '<span class="aevent">' + esc(a.event) + '</span>' +
         '<span class="atop"></span>' +
@@ -2842,7 +2874,12 @@ function pointForecast(latlng) {
         if (!c || c.us_aqi == null) return;
         var cat = c.us_aqi <= 50 ? 1 : c.us_aqi <= 100 ? 2 : c.us_aqi <= 150 ? 3 :
                   c.us_aqi <= 200 ? 4 : c.us_aqi <= 300 ? 5 : 6;
-        var el = document.querySelector(".pf-aqi");
+        // scope the write to THIS popup, and only while it's still open — a quick second
+        // click opens a NEW popup and a bare document.querySelector would land point A's
+        // AQI in point B's popup (same stale-response class loopReq/windReq guard against)
+        if (!pop.isOpen()) return;
+        var root = pop.getElement();
+        var el = root && root.querySelector(".pf-aqi");
         if (el) el.innerHTML = 'AQI now: <b style="color:' + AQI_CAT[cat][2] + '">' + Math.round(c.us_aqi) +
           "</b> (" + esc(AQI_CAT[cat][0]) + ")" +
           (c.pm2_5 != null ? " · PM2.5 " + Math.round(c.pm2_5) + " µg/m³" : "");
@@ -3222,7 +3259,15 @@ startClock();
 setStatus("Loading radar sites…");
 restorePrefs();     // apply saved control values + map view before anything reads them
 srvInit();          // probe the optional enhancement server (saved URL, then same-origin)
-loadStations().then(function () { buildSiteMarkers(); if (!restoredView) centerOnSite(); });
+loadStations().then(function () {
+  buildSiteMarkers();
+  if (!restoredView) centerOnSite();
+  // the boot loadWarnings() below races this fetch and runs with sites=[] (so sitesInView()
+  // finds no radars and every NST/EET/DVL fetch is skipped). Re-run it now that the sites
+  // exist, or a returning user with a restored view sees warnings-only — no cells/tops/VIL —
+  // until the 120 s auto-refresh or a manual pan. The 3-min Level III caches keep this cheap.
+  loadWarnings();
+});
 applyProduct();     // reads the restored product (default: base reflectivity / IEM live)
 loadWarnings();
 applyRestoredLayers();   // sync toggled layers + opacity to the restored state

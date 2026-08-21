@@ -18,6 +18,25 @@ window.Level3 = {
     return (id && id.length === 4 && id[0] === "K") ? id.substring(1) : id;
   },
 
+  /** list EVERY key under a prefix, following S3's 1000-key pages via start-after.
+      S3 returns the FIRST 1000 keys (chronological) — super-res tilts under VCP 212 +
+      SAILSx3 exceed 1000 files per UTC day, so ignoring IsTruncated made "latest" hours
+      old late in the day of a major severe event, with no indication. */
+  _listAll: function (prefix, after, acc) {
+    var self = this;
+    return fetch(this.BUCKET + "?list-type=2&prefix=" + prefix + "&max-keys=1000" +
+        (after ? "&start-after=" + encodeURIComponent(after) : ""))
+      .then(function (r) { return r.ok ? r.text() : ""; })
+      .then(function (xml) {
+        var keys = (xml.match(/<Key>([^<]+)<\/Key>/g) || [])
+          .map(function (k) { return k.replace(/<\/?Key>/g, ""); });
+        var all = acc.concat(keys);
+        if (keys.length && /<IsTruncated>true<\/IsTruncated>/.test(xml))
+          return self._listAll(prefix, keys[keys.length - 1], all);
+        return all;
+      });
+  },
+
   /** newest key for site+product, walking today back a few UTC days */
   latestKey: function (site3, product) {
     var self = this;
@@ -26,11 +45,8 @@ window.Level3 = {
       if (off > 3) return Promise.resolve(null);
       var d = new Date(Date.now() - off * 86400000);
       var prefix = site3 + "_" + product + "_" + ymd(d);
-      return fetch(self.BUCKET + "?list-type=2&prefix=" + prefix + "&max-keys=1000")
-        .then(function (r) { return r.ok ? r.text() : ""; })
-        .then(function (xml) {
-          var keys = (xml.match(/<Key>([^<]+)<\/Key>/g) || [])
-            .map(function (k) { return k.replace(/<\/?Key>/g, ""); });
+      return self._listAll(prefix, null, [])
+        .then(function (keys) {
           return keys.length ? keys[keys.length - 1] : tryDay(off + 1);
         })
         .catch(function () { return tryDay(off + 1); });
@@ -56,10 +72,8 @@ window.Level3 = {
     function day(off) {
       if (off > 3) return Promise.resolve(all.slice(-k));
       var d = new Date(Date.now() - off*86400000);
-      return fetch(self.BUCKET + "?list-type=2&prefix=" + site3 + "_" + product + "_" + ymd(d) + "&max-keys=1000")
-        .then(function (r) { return r.ok ? r.text() : ""; })
-        .then(function (xml) {
-          var keys = (xml.match(/<Key>([^<]+)<\/Key>/g) || []).map(function (m) { return m.replace(/<\/?Key>/g, ""); });
+      return self._listAll(site3 + "_" + product + "_" + ymd(d), null, [])   // paged: never truncates at 1000
+        .then(function (keys) {
           all = keys.concat(all);                    // older day prepended -> stays ascending
           return all.length >= k ? all.slice(-k) : day(off + 1);
         }).catch(function () { return day(off + 1); });
@@ -298,11 +312,14 @@ window.Level3 = {
       var idm = idRe.exec(line);
       if (!idm) return;
       var id = idm[1], pairs = [], m;
-      // integer az/range pairs only — the (?<![\d.]) / (?![\d.]) guards exclude the
+      // integer az/range pairs only — the (^|[^\d.]) / (?![\d.]) guards exclude the
       // trailing decimal "error" column (e.g. "1.0/ 1.0") that otherwise parsed as a
       // bogus ~0-range forecast point, drawing a track straight back to the radar.
-      var re = /(?<![\d.])(\d{1,3})\s*\/\s*(\d{1,3})(?![\d.])/g;
-      while ((m = re.exec(line))) pairs.push([parseInt(m[1], 10), parseInt(m[2], 10)]);
+      // The leading boundary GROUP (not an ES2018 lookbehind (?<![\d.])) matters: a
+      // lookbehind is an early SyntaxError on Safari/iOS < 16.4 that killed ALL of
+      // level3.js at parse time — the one post-ES5 construct in the codebase.
+      var re = /(^|[^\d.])(\d{1,3})\s*\/\s*(\d{1,3})(?![\d.])/g;
+      while ((m = re.exec(line))) pairs.push([parseInt(m[2], 10), parseInt(m[3], 10)]);
       if (pairs.length < 2) return;
       var az = pairs[0][0], ran = pairs[0][1], mvd = pairs[1][0], mvs = pairs[1][1];
       if (az > 360 || ran > 460 || mvd > 360 || mvs > 200) return;
