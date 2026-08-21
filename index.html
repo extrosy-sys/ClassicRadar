@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Classic Radar &mdash; NEXRAD Selector</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -285,10 +285,14 @@
 
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<!-- vendored pinned libraries (byte-exact copies of the CDN files this page used to load):
+     Leaflet 1.9.4 · pako 2.1.0 · three.js r128 · OrbitControls r128. Self-hosting removes
+     both the CDN-compromise XSS surface and the availability coupling (an unpkg outage was
+     a total outage of this public page). -->
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="vendor/pako.min.js"></script>
+<script src="vendor/three.min.js"></script>
+<script src="vendor/OrbitControls.js"></script>
 <script src="sites.js"></script>
 <script src="bzip2.js"></script>
 <script src="level3.js"></script>
