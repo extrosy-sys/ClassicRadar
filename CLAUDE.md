@@ -537,3 +537,16 @@ External review, 10 findings, all fixed:
   index.html points at local paths; no SRI needed since nothing third-party is fetched anymore.
 Still no test harness (static site, no Node on this PC) — the review's suggested golden-file
 Level III fixtures + a Pages console-error smoke remain open ideas.
+## Adversarial-audit fixes round (2026-08-28, site v2026-08-28.1)
+AUDIT-2026-08-28.md, 8 findings, all fixed (details + per-fix notes live in that file):
+loadSatLoop stale-guard moved above clearFrames (sibling parity); refreshStill sat/mrms
+branches gained the `!usingFrames` guard (no more live paint-over of paused/pinned frames);
+warning→cell merge got severity precedence (TOR 3 > SVR 2 > FFW/other 1 via `_warnRank` —
+newest-first feed no longer lets an older FFW repaint a ▼ TOR; hail/wind never nulled by a
+tagless warning; area/expires/_poly follow the winning glyph); Dir column null-guard;
+warnings fetch keeps `lastWarnFeatures` last-good on failure + chimeCheck/seenWarnIds only
+move on a fresh fetch (no false all-clear, no re-chime storm); showSiteInfo esc()'d;
+`alertsReq`/`metarReq` generation guards (stale pan responses can't repaint or poison
+alertsCache); 64 MB decompression caps (chunked pako.Inflate in level3._inflate — the
+vendored pako exports `pako.Inflate`; bzip2.MAX_OUT in simple() + the RLE grow loop, legit
+blocks ≤ ~46 MB) failing through the existing catch-to-null paths.

@@ -210,7 +210,7 @@ function srvSaveUrl(u) { try { localStorage.setItem(SRV_KEY, u); } catch (e) {} 
 /* ---- rotating client debug log (last 400 lines) — "Debug log" button opens it in a popup
    you can select-all + copy. Captures server state changes, enhanced-fetch failures, loop
    decisions, and every uncaught JS error. ---- */
-var SITE_VERSION = "2026-08-21.2";   // bump on every deploy — shown in the masthead + debug log
+var SITE_VERSION = "2026-08-28.1";   // bump on every deploy — shown in the masthead + debug log
 var CLOG = [];
 function clog(s) {
   var d = new Date();
@@ -839,6 +839,9 @@ function loadSatLoop() {
       .catch(function () { srvFail(); return null; });
   } else listP = Promise.resolve(null);
   return listP.then(function (list) {
+    if (req !== loopReq) return false;   // a newer loop load superseded this one — guard BEFORE
+                                         // clearFrames/pushes, like every sibling loader, or a slow
+                                         // response strips the new loop's buffers then bails
     if (!list) {
       // keyless: computed 10-min stamps ~40 min behind realtime (holes are dead-skipped at play)
       var newest = Math.floor((Date.now() / 1000 - 2400) / 600) * 600;
@@ -854,7 +857,6 @@ function loadSatLoop() {
         : g.url.replace("/default/default/", "/default/" + TS_ISO(ts) + "/"));
       frameTimes.push(secs);
     });
-    if (req !== loopReq) return false;
     if (useComposite()) makeCompBuffers("Satellite &copy; NASA GIBS / NOAA GOES-East");
     else makeBuffers(g.maxNative, "Satellite &copy; NASA GIBS / NOAA GOES-East", "GOES loop");
     curFrame = frameUrls.length - 1;
@@ -1511,7 +1513,7 @@ function showSiteInfo() {
   var s = currentSite();
   var el = document.getElementById("siteinfo");
   if (!s) { el.innerHTML = "&nbsp;"; return; }
-  el.innerHTML = "<b>" + s.id + "</b> (" + s.net + ")<br>" +
+  el.innerHTML = "<b>" + esc(s.id) + "</b> (" + esc(s.net) + ")<br>" +   // id/net are API-fed, escape like the tooltip/popup
     s.lat.toFixed(3) + "°, " + s.lon.toFixed(3) + "°";
 }
 function centerOnSite() {
@@ -1653,6 +1655,7 @@ function nearestSite(lat, lon) {
 var WARN_URL = "https://api.weather.gov/alerts/active?status=actual&message_type=alert" +
   "&event=Tornado%20Warning&event=Severe%20Thunderstorm%20Warning" +
   "&event=Flash%20Flood%20Warning&event=Special%20Marine%20Warning";
+var lastWarnFeatures = null;   // last SUCCESSFUL warning fetch — reused when a refresh fails
 
 /* below this zoom we stop fetching Level III entirely. Between here and z7 the storm field is
    drawn SPARSE (only significant / warning-linked / TVS cells + tracks) so it stays readable;
@@ -1688,9 +1691,16 @@ function loadStormData() {
   setTableStatus("querying NWS + Level III…");
   loadAlerts();                                   // verbose alerts table (independent, non-blocking)
   var warnP = fetch(WARN_URL, { headers:{ "Accept":"application/geo+json" } })
-    .then(function (r) { return r.ok ? r.json() : { features: [] }; })
-    .then(function (j) { return j.features || []; })
-    .catch(function () { return []; });
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function (j) { lastWarnFeatures = j.features || []; return { features: lastWarnFeatures, fresh: true }; })
+    .catch(function () {
+      // one routine api.weather.gov 503 must not clear every warning polygon and blank the
+      // table ("No active severe warnings" — a false all-clear) for a whole refresh cycle:
+      // reuse the last-good set, same treatment fetchAllAlertsNational already has.
+      // fresh:false keeps chimeCheck from rebuilding seenWarnIds off a failed fetch — a
+      // collapsed seen-set would re-chime every old warning on the next success.
+      return { features: lastWarnFeatures || [], fresh: false };
+    });
   var svs = [];
   // window.Level3 can be missing entirely if level3.js failed to parse/load — the direct
   // Level3.site3() calls below would then throw synchronously and kill the whole warnings
@@ -1717,7 +1727,7 @@ function loadStormData() {
         if (e.eet) eetBySite[e.id] = e.eet;
         if (e.dvl) dvlBySite[e.id] = e.dvl;
       });
-      renderStorm(res[0], l3List, eetBySite, dvlBySite);
+      renderStorm(res[0].features, l3List, eetBySite, dvlBySite, res[0].fresh);
     });
   });
 }
@@ -1760,7 +1770,7 @@ function drawTopCallouts(rows) {
   });
 }
 
-function renderStorm(features, l3List, eetBySite, dvlBySite) {
+function renderStorm(features, l3List, eetBySite, dvlBySite, fresh) {
   eetBySite = eetBySite || {};
   dvlBySite = dvlBySite || {};
   warnLayer.clearLayers();
@@ -1771,7 +1781,8 @@ function renderStorm(features, l3List, eetBySite, dvlBySite) {
   lastL3 = l3List[0] ? l3List[0].result : null;
 
   var bounds = map.getBounds().pad(0.15);
-  chimeCheck(features, bounds);          // optional chime on a never-seen in-view warning
+  if (fresh !== false) chimeCheck(features, bounds);   // chime + seenWarnIds only move on a
+                                                       // SUCCESSFUL fetch (stale reuse is the same set)
   var z = map.getZoom();
   var showTracks = z >= TRACK_MIN_ZOOM && document.getElementById("c-tracks").checked;
   // thin tracks progressively as you zoom out so they don't overlap into mush:
@@ -1827,13 +1838,24 @@ function renderStorm(features, l3List, eetBySite, dvlBySite) {
       target = { key: "W#" + rows.length, id: cellId(rows.length), center: cen, track: [] };
       rows.push(target);
     }
-    if (code === "TOR" || (torDet && /OBSERVED/i.test(torDet))) { target.glyph="▼"; target.cls="t-tor"; target.threat="tvs"; target.tvs=true; }
-    else if (code === "SVR") { target.glyph="■"; target.cls="t-hail"; target.threat="hail"; }
-    else { target.glyph="◆"; target.cls="t-meso"; target.threat=(code==="FFW"?"flood":"marine"); }
-    target.event = props.event.replace(" Warning", " Wrn");
-    target.hail = hail; target.wind = wind;
-    target.area = (props.areaDesc || "").split(";")[0];
-    target.expires = props.expires ? new Date(props.expires) : null;
+    // Severity precedence for the merge: Tornado (3) > Severe T'storm (2) > Flash Flood/other (1)
+    // > bare radar cell (0). alerts/active is newest-first, so without this rank gate an older
+    // FFW/SVR processed AFTER a TOR silently repainted the cell's ▼ TOR marker/row as flood/SVR.
+    // A lower-ranked warning may still contribute hail/wind tags, but never nulls out real ones.
+    var rank = (code === "TOR" || (torDet && /OBSERVED/i.test(torDet))) ? 3 : code === "SVR" ? 2 : 1;
+    var won = rank > (target._warnRank || 0);
+    if (won) {
+      target._warnRank = rank;
+      if (rank === 3) { target.glyph="▼"; target.cls="t-tor"; target.threat="tvs"; target.tvs=true; }
+      else if (rank === 2) { target.glyph="■"; target.cls="t-hail"; target.threat="hail"; }
+      else { target.glyph="◆"; target.cls="t-meso"; target.threat=(code==="FFW"?"flood":"marine"); }
+      // event/area/expires follow the warning that owns the glyph, so the row stays coherent
+      target.event = props.event.replace(" Warning", " Wrn");
+      target.area = (props.areaDesc || "").split(";")[0];
+      target.expires = props.expires ? new Date(props.expires) : null;
+    }
+    if (hail != null) target.hail = hail;   // keep an existing tag when this warning has none
+    if (wind != null) target.wind = wind;
     if ((target.spd == null || target.dir === "—" || !target.dir) && mot.deg != null) {
       target.dir = compass((mot.deg + 180) % 360); target.spd = mot.kt;
     }
@@ -1842,7 +1864,7 @@ function renderStorm(features, l3List, eetBySite, dvlBySite) {
         style:{ color:color, weight:2.5, fill:true, fillColor:color, fillOpacity:0.15, dashArray:"6 4" } })
         .addTo(warnLayer);
       poly.on("click", onAlertAreaClick);      // overlapping warnings -> picker list (from the alerts feed)
-      target._poly = poly; target._color = color;
+      if (won || !target._poly) { target._poly = poly; target._color = color; }   // row selection fills the winning warning's polygon
     }
   });
 
@@ -1930,7 +1952,7 @@ function buildTable(rows) {
       '<td>' + (r.vil != null ? r.vil : "—") + '</td>' +
       '<td>' + (r.hail != null ? r.hail.toFixed(2) : "—") + '</td>' +
       '<td>' + (r.wind != null ? r.wind : "—") + '</td>' +
-      '<td class="dir">' + r.dir + '</td>' +
+      '<td class="dir">' + (r.dir || "—") + '</td>' +   // warning-only rows can lack motion (FFWs commonly)
       '<td>' + (r.spd != null ? r.spd : "—") + '</td>' +
       '<td class="ev">' + esc(r.area) + '</td>' +    // NWS props.areaDesc — API-fed, escape
       '<td>' + (r.expires ? fmtClock(r.expires) : "—") + '</td>' +
@@ -2176,6 +2198,8 @@ var alertsData = [];          // in-view alerts (sorted)
 var cellTops = [];            // [{lat,lon,top}] storm-cell echo tops (kft) sampled from EET
 var alertRefs = {};           // index -> { poly, center }
 var alertsCache = null;       // { t, features } national list, 60 s TTL
+var alertsReq = 0;            // request generation: only the NEWEST loadAlerts may render or
+                              // write alertsCache (same stale-guard pattern as loopReq)
 var selectedAlertUid = null;
 var SEV_COLOR = { Extreme:"#e0004d", Severe:"#e01f1f", Moderate:"#e8820c", Minor:"#c9a800", Unknown:"#7f8fa6" };
 var SEV_RANK = { Extreme:0, Severe:1, Moderate:2, Minor:3, Unknown:4 };
@@ -2184,17 +2208,19 @@ function esc(s){ return (s == null ? "" : String(s)).replace(/[&<>"]/g, function
   return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]; }); }
 function fmtLocal(d){ try { return d.toLocaleString([], { month:"short", day:"numeric", hour:"numeric", minute:"2-digit", timeZoneName:"short" }); } catch(e){ return ""; } }
 
-function fetchAllAlertsNational() {
+function fetchAllAlertsNational(req) {
   // active alerts change slowly; cache the ~2 MB national list 3 min so panning re-filters
   // from memory instead of refetching (re-filtering the parsed features per pan is cheap).
   if (alertsCache && !alertsCache.key && Date.now() - alertsCache.t < 180000) return Promise.resolve(alertsCache.features);
   return fetch(ALERTS_URL, { headers:{ "Accept":"application/geo+json" } })
     .then(function (r) { return r.ok ? r.json() : { features: [] }; })
-    .then(function (j) { var f = j.features || []; alertsCache = { t: Date.now(), features: f }; return f; })
+    .then(function (j) { var f = j.features || [];
+      if (req === alertsReq) alertsCache = { t: Date.now(), features: f };   // stale completion: hand back data, touch nothing
+      return f; })
     .catch(function () { return (alertsCache && alertsCache.features) || []; });
 }
-function fetchAllAlertsCached() {
-  if (!SRV.up) return fetchAllAlertsNational();
+function fetchAllAlertsCached(req) {
+  if (!SRV.up) return fetchAllAlertsNational(req);
   // enhanced: the server holds the national feed and returns a bbox-filtered, slimmed
   // FeatureCollection (same NWS shape, ~95% smaller). Key the client cache by a rounded,
   // padded box so a small pan re-filters locally and a big one refetches.
@@ -2205,12 +2231,17 @@ function fetchAllAlertsCached() {
     return Promise.resolve(alertsCache.features);
   return fetch(SRV.url + "/api/alerts?bbox=" + key)
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-    .then(function (j) { var f = j.features || []; alertsCache = { t: Date.now(), features: f, key: key }; return f; })
-    .catch(function () { srvFail(); alertsCache = null; return fetchAllAlertsNational(); });
+    .then(function (j) { var f = j.features || [];
+      if (req === alertsReq) alertsCache = { t: Date.now(), features: f, key: key };   // never cache a superseded bbox
+      return f; })
+    .catch(function () { srvFail(); if (req === alertsReq) alertsCache = null; return fetchAllAlertsNational(req); });
 }
 
 function loadAlerts() {
-  return fetchAllAlertsCached().then(function (features) {
+  var req = ++alertsReq;
+  return fetchAllAlertsCached(req).then(function (features) {
+    if (req !== alertsReq) return;      // pan A's slow response landing after pan B rendered:
+                                        // don't re-render the wrong-bbox list (see loopReq)
     var b = map.getBounds().pad(0.15);
     var inView = features.filter(function (f) {
       if (!f.geometry) return false;                       // zone-only alerts have no polygon to map
@@ -2808,9 +2839,11 @@ function metarFromSynoptic(b) {
   return fetch(SRV.url + "/api/obs?bbox=" + bbox)
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); });
 }
+var metarReq = 0;   // request generation: a stale pan-A response must not repaint pan B's obs
 function loadMetar() {
   metarLayer.clearLayers();
   if (!document.getElementById("c-metar").checked) return;
+  var req = ++metarReq;
   var b = map.getBounds();
   // best available chain: Synoptic mesonet (server+token) -> AWC aviation (server) -> IEM (keyless)
   var obsP = SRV.up && SRV.synoptic
@@ -2819,6 +2852,7 @@ function loadMetar() {
     ? metarFromAwc(b).catch(function () { srvFail(); return metarFromIem(b); })
     : metarFromIem(b);
   obsP.then(function (obs) {
+    if (req !== metarReq) return;       // superseded by a newer pan/refresh (see loopReq)
     if (!document.getElementById("c-metar").checked) return;
     obs = obs.filter(function (p) {
       if (!p || p.tmpf == null || p.lat == null) return false;
@@ -3088,11 +3122,13 @@ function refreshStill() {
     if (compLayer) compLayer.setParams({ _t: Date.now() });
     if (iemLayer) iemLayer.setUrl(IEM_URL + "?_=" + Date.now());
   } else if (src === "sat") {
-    showSat(opt.getAttribute("data-sat"));          // GIBS "default" time -> latest scan
+    // paused/pinned loop frame up (usingFrames): re-adding the live still would paint over it
+    // while the stamp still claims the archive time — same guard as the rv/ca branches
+    if (!usingFrames) showSat(opt.getAttribute("data-sat"));   // GIBS "default" time -> latest scan
   } else if (src === "precip") {
     if (precipLayer) { precipLayer._crBust = Date.now(); precipLayer.redraw(); }
   } else if (src === "mrms") {
-    refreshMrms(opt.getAttribute("data-mrms"));
+    if (!usingFrames) refreshMrms(opt.getAttribute("data-mrms"));   // ditto (showMrms also rewrites #stamp)
   } else if (src === "ca") {
     if (!usingFrames) showCa(opt.getAttribute("data-ca"));   // re-pull the latest GeoMet scan
   }

@@ -269,13 +269,35 @@ window.Level3 = {
   },
 
   // ---- internals ----
+
+  /** Hard cap on decompressed output (shared intent with bzip2.MAX_OUT): every byte from the
+      bucket is treated as hostile, and zlib can expand ~1000x — a poisoned response must fail
+      the decode (the same catch-to-null path a truncated stream takes), never OOM the tab.
+      Real Level III products inflate to a few MB at most; 64 MB is far beyond legitimate. */
+  MAX_INFLATED: 64 * 1024 * 1024,
+
   _inflate: function (data) {
     var z = -1, w = Math.min(80, data.length - 1);
     for (var i = 0; i < w; i++) {
       if (data[i] === 0x78) { var n = data[i + 1]; if (n === 0x01 || n === 0x9c || n === 0xda) { z = i; break; } }
     }
     if (z < 0) return data;
-    try { var out = pako.inflate(data.subarray(z)); return out.length > 60 ? out : data; }
+    try {
+      // chunked inflate so the cap applies DURING decode — a one-shot pako.inflate would have
+      // ballooned fully in memory before any after-the-fact length check could run
+      var max = this.MAX_INFLATED, total = 0, chunks = [];
+      var inf = new pako.Inflate();
+      inf.onData = function (chunk) {
+        total += chunk.length;
+        if (total > max) throw new Error("inflate output over cap");   // -> catch below, like a truncated stream
+        chunks.push(chunk);
+      };
+      inf.push(data.subarray(z), true);
+      if (inf.err) return data;
+      var out = new Uint8Array(total), off = 0;
+      for (var c = 0; c < chunks.length; c++) { out.set(chunks[c], off); off += chunks[c].length; }
+      return out.length > 60 ? out : data;
+    }
     catch (e) { return data; }
   },
 

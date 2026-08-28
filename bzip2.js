@@ -16,6 +16,11 @@ I hereby release this code under the GNU Library General Public License
 
 var bzip2 = {};
 
+// Hard cap on total decompressed output (mirrors Level3.MAX_INFLATED): bzip2 expands ~51x per
+// 900 KB block with an unbounded number of blocks, so a poisoned stream must throw (the callers
+// catch to null) instead of OOMing the tab. Real radar symbology is a few MB; 64 MB is generous.
+bzip2.MAX_OUT = 64 * 1024 * 1024;
+
 bzip2.array = function (bytes) {
     var bit = 0,
         byte = 0;
@@ -51,6 +56,8 @@ bzip2.simple = function (bits) {
         if (chunk != -1) {
             chunks.push(chunk);
             index += chunk.byteLength;
+            if (index > bzip2.MAX_OUT)
+                throw "total output exceeds decompression cap";
         }
     } while (chunk != -1);
     all = new Uint8Array(index);
@@ -291,6 +298,8 @@ bzip2.decompress = function (bits, size, len) {
         }
         while (copies--) {
             if (index >= output.length) {                 // grow: final-RLE output can exceed the BWT block size
+                if (output.length * 2 > bzip2.MAX_OUT)    // legit blocks top out ~46 MB; refuse to balloon past the cap
+                    throw "block output exceeds decompression cap";
                 var grown = new Uint8Array(output.length * 2);
                 grown.set(output);
                 output = grown;
