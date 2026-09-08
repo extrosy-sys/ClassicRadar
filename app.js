@@ -63,14 +63,17 @@ pane("metar", 660);           // surface-observation station plots (top)
 
 /* base + clutter tile layers */
 var layers = {
-  base: L.tileLayer("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png",
-        { subdomains:"abcd", maxZoom:18, noWrap:true, attribution:"&copy; OpenStreetMap, &copy; CARTO" }),
+  // CARTO's free basemaps started watermarking "API KEY REQUIRED" (2026-09) — Esri's Light
+  // Gray Canvas pair is the keyless replacement: same unlabeled-base + labels-overlay split.
+  // Esri tile order is {z}/{y}/{x} (row before column).
+  base: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+        { maxZoom:18, maxNativeZoom:16, noWrap:true, attribution:"Basemap &copy; Esri" }),
   county: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
         { pane:"clutter", maxZoom:18, maxNativeZoom:16, noWrap:true, opacity:0.9, attribution:"Boundaries &copy; Esri" }),
   hwy: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}",
         { pane:"clutter", maxZoom:18, noWrap:true, attribution:"Transportation &copy; Esri" }),
-  city: L.tileLayer("https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png",
-        { subdomains:"abcd", pane:"clutter", maxZoom:18, noWrap:true })
+  city: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
+        { pane:"clutter", maxZoom:18, maxNativeZoom:16, noWrap:true })
 };
 layers.base.addTo(map);
 layers.city.addTo(map);
@@ -210,7 +213,7 @@ function srvSaveUrl(u) { try { localStorage.setItem(SRV_KEY, u); } catch (e) {} 
 /* ---- rotating client debug log (last 400 lines) — "Debug log" button opens it in a popup
    you can select-all + copy. Captures server state changes, enhanced-fetch failures, loop
    decisions, and every uncaught JS error. ---- */
-var SITE_VERSION = "2026-08-28.1";   // bump on every deploy — shown in the masthead + debug log
+var SITE_VERSION = "2026-09-08.1";   // bump on every deploy — shown in the masthead + debug log
 var CLOG = [];
 function clog(s) {
   var d = new Date();

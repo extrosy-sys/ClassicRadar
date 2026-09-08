@@ -406,7 +406,9 @@ window.Volume3D = (function () {
         var im = new Image(); im.crossOrigin = "anonymous";
         im.onload = function () { ctx.drawImage(im, (tx-minTx)*256, (ty-minTy)*256); if (++done>=total) tex.needsUpdate = true; };
         im.onerror = function () { if (++done>=total) tex.needsUpdate = true; };
-        im.src = "https://a.basemaps.cartocdn.com/rastertiles/voyager/"+Z+"/"+tx+"/"+ty+".png";
+        // CARTO went API-key-only (2026-09); Esri World Street Map = keyless labeled floor.
+        // NOTE Esri path order is z/ROW/COL — ty before tx.
+        im.src = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/"+Z+"/"+ty+"/"+tx;
       })(tx, ty);
     }
     // explicit ground quad in world coords (X=east, Z=north, Y=0) with UVs pinned to the map,
